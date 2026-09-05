@@ -1,0 +1,9 @@
+{
+  "name": "@beacon/ble-contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared BLE domain models, state machines, and native bridge contracts",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "sideEffects": false
+}

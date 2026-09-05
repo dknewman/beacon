@@ -1,0 +1,16 @@
+node_modules
+**/build
+**/coverage
+**/ios/Pods
+**/ios/build
+**/android/.gradle
+**/android/build
+**/android/app/build
+**/vendor
+yarn.lock
+*.pbxproj
+*.storyboard
+*.xcscheme
+*.plist
+*.xcprivacy
+PROJECT.md

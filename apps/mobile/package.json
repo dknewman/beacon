@@ -1,0 +1,40 @@
+{
+  "name": "@beacon/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "android": "react-native run-android",
+    "ios": "react-native run-ios",
+    "start": "react-native start",
+    "codegen": "react-native codegen",
+    "pods": "cd ios && bundle exec pod install"
+  },
+  "dependencies": {
+    "@beacon/ble-contracts": "0.1.0",
+    "@beacon/validation": "0.1.0",
+    "react": "19.2.3",
+    "react-native": "0.87.1",
+    "react-native-safe-area-context": "^5.5.2"
+  },
+  "devDependencies": {
+    "@react-native-community/cli": "20.2.0",
+    "@react-native-community/cli-platform-android": "20.2.0",
+    "@react-native-community/cli-platform-ios": "20.2.0",
+    "@react-native/metro-config": "0.87.1",
+    "@testing-library/react-native": "^14.0.1",
+    "test-renderer": "^1.0.0"
+  },
+  "codegenConfig": {
+    "name": "BeaconBluetoothSpec",
+    "type": "modules",
+    "jsSrcsDir": "src/native/specs",
+    "android": {
+      "javaPackageName": "com.beacon.bluetooth.spec"
+    },
+    "ios": {
+      "modulesProvider": {
+        "BeaconBluetooth": "BeaconBluetoothModule"
+      }
+    }
+  }
+}
