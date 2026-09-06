@@ -13,7 +13,14 @@ export interface Spec extends TurboModule {
   getBluetoothState(): Promise<string>;
   getPermissionState(): Promise<string>;
   requestPermission(): Promise<string>;
+  startScan(serviceUuids: string[], allowDuplicates: boolean): Promise<void>;
+  stopScan(): Promise<void>;
   readonly onBluetoothStateChanged: CodegenTypes.EventEmitter<{ state: string }>;
+  readonly onDeviceDiscovered: CodegenTypes.EventEmitter<DeviceDiscoveredEvent>; // BleDevice shape
+  readonly onBleError: CodegenTypes.EventEmitter<{
+    deviceId?: string;
+    error: BleErrorPayload;
+  }>;
 }
 export default TurboModuleRegistry.getEnforcing<Spec>('BeaconBluetooth');
 ```
@@ -28,8 +35,12 @@ Generated artifacts (never committed):
   `NativeBeaconBluetoothSpec` (protocol), `NativeBeaconBluetoothSpecBase` (event emitter base
   class) and `NativeBeaconBluetoothSpecJSI`.
 - Android: `com.beacon.bluetooth.spec.NativeBeaconBluetoothSpec` (abstract class with one
-  `Promise` method per spec method and `emitOnBluetoothStateChanged(ReadableMap)`). The
-  package comes from `codegenConfig.android.javaPackageName`, which the Gradle plugin honors.
+  `Promise` method per spec method and one `emitOn…(ReadableMap)` per emitter). The package
+  comes from `codegenConfig.android.javaPackageName`, which the Gradle plugin honors.
+
+Scalar parameters are chosen over object parameters (`startScan(serviceUuids, allowDuplicates)`
+rather than `startScan(options)`) because arrays and primitives map to plain `NSArray`/`BOOL` and
+`ReadableArray`/`Boolean`, whereas object parameters generate C++ struct wrappers on iOS.
 
 The iOS and Android builds run codegen automatically. The standalone
 `react-native codegen` command also works for inspection, but note that it ignores
@@ -40,8 +51,10 @@ the Gradle build is the source of truth.
 
 ```text
 BeaconBluetoothModule.mm  (Objective-C++)  — conforms to the generated spec, forwards to Swift
-BluetoothManager.swift                     — owns CBCentralManager, emits state via closure
+BluetoothManager.swift                     — owns CBCentralManager; adapter state, permission, scanning
 Mapping/BluetoothStateMapper.swift         — CBManagerState → wire value
+Mapping/AuthorizationMapper.swift          — CBManagerAuthorization → wire value
+Mapping/AdvertisementMapper.swift          — discovery callback → BleDevice payload, UUID parsing
 Errors/BleError.swift                      — CoreBluetooth errors → contract codes
 ```
 
@@ -52,30 +65,41 @@ free of Bluetooth logic. Swift is exposed through the Xcode-generated `Beacon-Sw
 Threading: CoreBluetooth callbacks arrive on a private serial queue. The codegen event emitter is
 thread safe, so events are emitted from that queue directly.
 
+Void promises: Swift completes with `nil` on success or a `BleError.payload` dictionary; the
+shim's `settle:resolve:reject:` turns the dictionary into `reject(code, message, NSError)` so
+JavaScript's `toBleError` reads the contract code.
+
 ## Android
 
 ```text
 BeaconBluetoothModule.kt   — extends generated NativeBeaconBluetoothSpec, module lifecycle
 BeaconBluetoothPackage.kt  — BaseReactPackage registration (isTurboModule = true)
 BluetoothController.kt     — BluetoothManager/BluetoothAdapter, ACTION_STATE_CHANGED receiver
-mapping/BluetoothStateMapper.kt
+scanning/BleScanner.kt     — BluetoothLeScanner, pre-flight checks, throttling, onScanFailed
+permissions/*              — runtime permission flow (see PERMISSIONS.md)
+mapping/BluetoothStateMapper.kt, ScanResultMapper.kt, BleUuid.kt, ScanFailureMapper.kt, IsoTimestamp.kt
 errors/BleError.kt         — contract codes, Promise.rejectWith, Throwable.toBleError
 ```
 
-`initialize()` starts the broadcast receiver and `invalidate()` stops it, so no receiver leaks
-across React instance reloads. Events are emitted only once the TurboModule infrastructure has
-bound the emitter callback.
+`initialize()` starts the broadcast receiver and `invalidate()` stops it and any scan, so no
+receiver or scan leaks across React instance reloads. Events are emitted only once the
+TurboModule infrastructure has bound the emitter callback. When the adapter leaves `STATE_ON`
+the module forgets the scan (the platform has already dropped it) so the next `startScan` is a
+real start.
 
 ## JavaScript wrapper
 
-`apps/mobile/src/native/createNativeBluetoothAdapterClient.ts` implements
-`BluetoothAdapterApi`:
+`apps/mobile/src/native/createNativeBleClient.ts` implements `BleClient`
+(`BluetoothAdapterApi & PermissionApi & ScanApi`):
 
-- `getBluetoothState()` validates the string with `parseBluetoothState`; invalid values reject
-  with `BleError("invalid_payload")`; native rejections are mapped with `toBleError` and default
-  to `native_failure`.
-- `subscribe()` folds each typed emitter into the `NativeBleEvent` union, validates, and returns
-  an unsubscribe function that removes the native subscription.
+- Value-returning calls validate the result (`parseBluetoothState`, `parseBlePermissionState`);
+  invalid values reject with `BleError("invalid_payload")`; native rejections are mapped with
+  `toBleError` and default to `native_failure`.
+- `startScan(options)` fills explicit defaults (`[]`, `false`) before crossing the bridge;
+  `stopScan()` never throws for "not scanning".
+- `subscribe()` folds the three typed emitters into the `NativeBleEvent` union, validates each
+  payload (`scan.device_discovered` also normalizes UUIDs), and returns one unsubscribe function
+  that removes every native subscription.
 
 ## Error convention
 
