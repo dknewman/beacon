@@ -29,7 +29,7 @@ jobs:
       - run: yarn lint
       - run: yarn format:check
       - run: yarn test:ci
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: coverage
@@ -63,7 +63,7 @@ jobs:
       - name: Assemble debug APK
         working-directory: apps/mobile/android
         run: ./gradlew :app:assembleDebug --no-daemon -PreactNativeArchitectures=arm64-v8a
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: beacon-debug-apk
           path: apps/mobile/android/app/build/outputs/apk/debug/*.apk
@@ -116,7 +116,7 @@ jobs:
             | xcbeautify --renderer github-actions
       - name: Upload xcresult on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ios-xcresult
           path: ${{ runner.temp }}/Beacon.xcresult
