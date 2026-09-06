@@ -1,7 +1,11 @@
 import React from 'react';
 import { AppState, Linking, type AppStateStatus } from 'react-native';
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
-import type { BleDevice, ScanDeviceDiscoveredEvent } from '@beacon/ble-contracts';
+import type {
+  BleDevice,
+  GattService,
+  ScanDeviceDiscoveredEvent,
+} from '@beacon/ble-contracts';
 import { App } from '../src/app/App';
 import { FakeBleClient } from './fakes/FakeBleClient';
 
@@ -780,5 +784,167 @@ describe('App (device detail and connection lifecycle)', () => {
     });
     await fireEvent.press(screen.getByTestId('detail-back'));
     expect(screen.getByTestId('device-scale-seen')).toHaveTextContent(/Connected/);
+  });
+});
+
+const heartRateTable: GattService[] = [
+  {
+    uuid: '00001800-0000-1000-8000-00805F9B34FB',
+    primary: true,
+    characteristics: [
+      {
+        serviceUuid: '00001800-0000-1000-8000-00805F9B34FB',
+        uuid: '00002A00-0000-1000-8000-00805F9B34FB',
+        properties: ['read'],
+      },
+    ],
+  },
+  {
+    uuid: '0000180D-0000-1000-8000-00805F9B34FB',
+    primary: true,
+    characteristics: [
+      {
+        serviceUuid: '0000180D-0000-1000-8000-00805F9B34FB',
+        uuid: '00002A37-0000-1000-8000-00805F9B34FB',
+        properties: ['notify'],
+      },
+      {
+        serviceUuid: '0000180D-0000-1000-8000-00805F9B34FB',
+        uuid: '00002A39-0000-1000-8000-00805F9B34FB',
+        properties: ['write', 'write_without_response'],
+      },
+    ],
+  },
+  { uuid: '0000FFF0-0000-1000-8000-00805F9B34FB', primary: false, characteristics: [] },
+];
+
+/** Opens the detail screen and brings the connection to ready. */
+async function openConnected() {
+  const client = await openDetail();
+  await fireEvent.press(connectionAction());
+  await act(async () => {
+    client.emitConnected('scale');
+    client.resolveConnect();
+  });
+  expect(connectionStatus()).toHaveTextContent('Ready');
+  return client;
+}
+
+describe('App (GATT discovery)', () => {
+  it('fetches the table once the link is ready and shows the service count', async () => {
+    const client = await openConnected();
+    expect(client.discoverServicesCalls).toEqual(['scale']);
+    expect(screen.getByTestId('services-value')).toHaveTextContent('Discovering');
+    await act(async () => {
+      client.resolveServices(heartRateTable);
+    });
+    expect(screen.getByTestId('services-value')).toHaveTextContent('3');
+    expect(screen.getByTestId('services')).toHaveTextContent(
+      /3 characteristics across 3 services/,
+    );
+    expect(screen.getByTestId('inspect-gatt')).toBeOnTheScreen();
+  });
+
+  it('shows services with names and characteristics with properties in the inspector', async () => {
+    const client = await openConnected();
+    await act(async () => {
+      client.resolveServices(heartRateTable);
+    });
+    await fireEvent.press(screen.getByTestId('inspect-gatt'));
+    expect(screen.getByTestId('gatt-inspector')).toBeOnTheScreen();
+    // The table is shared with the detail screen: no second native call.
+    expect(client.discoverServicesCalls).toEqual(['scale']);
+
+    expect(screen.getByTestId('service-1800-name')).toHaveTextContent('Generic Access');
+    expect(screen.getByTestId('service-180D-name')).toHaveTextContent('Heart Rate');
+    expect(screen.getByTestId('service-FFF0-name')).toHaveTextContent(
+      'Unknown secondary service',
+    );
+    expect(screen.getByTestId('service-FFF0-code')).toHaveTextContent(/secondary/);
+    expect(screen.getByTestId('characteristic-2A37')).toHaveTextContent(
+      /Heart Rate Measurement/,
+    );
+    expect(screen.getByTestId('characteristic-2A37-properties')).toHaveTextContent(
+      'Notify',
+    );
+    expect(screen.getByTestId('characteristic-2A39-properties')).toHaveTextContent(
+      'Write, Write without response',
+    );
+
+    await fireEvent.press(screen.getByTestId('characteristic-2A37'));
+    expect(screen.getByTestId('characteristic-title')).toHaveTextContent(
+      'Heart Rate Measurement',
+    );
+    expect(screen.getByTestId('characteristic-code')).toHaveTextContent('2A37');
+    expect(screen.getByTestId('characteristic-service-value')).toHaveTextContent(
+      'Heart Rate',
+    );
+    expect(screen.getByTestId('characteristic-properties-value')).toHaveTextContent(
+      'Notify',
+    );
+    expect(screen.getByTestId('characteristic-properties')).toHaveTextContent(
+      /pushes updates/,
+    );
+    expect(screen.getByTestId('characteristic-value-value')).toHaveTextContent(
+      'Not read yet',
+    );
+
+    await fireEvent.press(screen.getByTestId('characteristic-back'));
+    expect(screen.getByTestId('gatt-inspector')).toBeOnTheScreen();
+    await fireEvent.press(screen.getByTestId('gatt-back'));
+    expect(screen.getByTestId('device-detail')).toBeOnTheScreen();
+  });
+
+  it('reports a failed discovery with its code and retries from the inspector', async () => {
+    const client = await openConnected();
+    await act(async () => {
+      client.rejectServices(
+        Object.assign(new Error('Service discovery failed (status 129)'), {
+          code: 'service_not_found',
+        }),
+      );
+    });
+    expect(screen.getByTestId('services-value')).toHaveTextContent('Unavailable');
+    await fireEvent.press(screen.getByTestId('inspect-gatt'));
+    expect(screen.getByTestId('gatt-status-value')).toHaveTextContent('Failed');
+    expect(screen.getByTestId('gatt-status')).toHaveTextContent(/service_not_found/);
+
+    await fireEvent.press(screen.getByTestId('gatt-retry'));
+    expect(client.discoverServicesCalls).toEqual(['scale', 'scale']);
+    expect(screen.getByTestId('gatt-status-value')).toHaveTextContent('Discovering');
+    await act(async () => {
+      client.resolveServices([]);
+    });
+    expect(screen.getByTestId('gatt-status-value')).toHaveTextContent('No services');
+  });
+
+  it('drops the table when the link ends and discovers again on reconnect', async () => {
+    const client = await openConnected();
+    await act(async () => {
+      client.resolveServices(heartRateTable);
+    });
+    expect(screen.getByTestId('services-value')).toHaveTextContent('3');
+
+    await act(async () => {
+      client.emit({
+        type: 'ble.error',
+        deviceId: 'scale',
+        error: { code: 'disconnected', message: 'The peripheral closed the connection' },
+      });
+      client.emit({
+        type: 'connection.state_changed',
+        deviceId: 'scale',
+        state: 'disconnected',
+      });
+    });
+    expect(screen.getByTestId('services-value')).toHaveTextContent('—');
+    expect(screen.queryByTestId('inspect-gatt')).toBeNull();
+
+    await fireEvent.press(connectionAction());
+    await act(async () => {
+      client.emitConnected('scale');
+      client.resolveConnect();
+    });
+    expect(client.discoverServicesCalls).toEqual(['scale', 'scale']);
   });
 });

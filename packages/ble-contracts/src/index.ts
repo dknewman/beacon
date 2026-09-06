@@ -8,5 +8,6 @@ export * from './packet';
 export * from './session';
 export * from './errors';
 export * from './uuid';
+export * from './known-uuids';
 export * from './native-client';
 export * from './native-events';

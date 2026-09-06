@@ -13,6 +13,7 @@ import { useTheme } from '../../theme/useTheme';
 import type { CachedDevice } from '../scan/deviceCache';
 import { describeLastSeen } from '../scan/lastSeen';
 import { useBluetoothSession } from '../scan/ScanProvider';
+import { useGatt } from '../gatt/GattProvider';
 import { describeConnection, presentConnectionAction } from './connectionLabels';
 import { useConnections } from './ConnectionProvider';
 
@@ -32,6 +33,7 @@ export function DeviceDetailScreen(): React.JSX.Element {
   const { params } = useRoute<DeviceDetailRoute>();
   const { scan, bluetooth } = useBluetoothSession();
   const connections = useConnections();
+  const gatt = useGatt();
   const isFocused = useIsFocused();
 
   const cached = scan.devices.find(device => device.id === params.deviceId);
@@ -52,6 +54,14 @@ export function DeviceDetailScreen(): React.JSX.Element {
     params.deviceId,
     connection.state === 'ready' && isFocused,
   );
+  const gattStatus = gatt.statusOf(params.deviceId);
+
+  // Fetch the table as soon as the link is ready so the Services row is filled in.
+  useEffect(() => {
+    if (connection.state === 'ready' && gattStatus.phase === 'idle') {
+      gatt.discover(params.deviceId);
+    }
+  }, [connection.state, gattStatus.phase, gatt, params.deviceId]);
 
   const onAction = useCallback(() => {
     switch (action.kind) {
@@ -135,6 +145,23 @@ export function DeviceDetailScreen(): React.JSX.Element {
         testID="signal"
       />
 
+      <StatusRow
+        label="Services"
+        value={presentServices(connection.state === 'ready', gattStatus).value}
+        detail={presentServices(connection.state === 'ready', gattStatus).detail}
+        testID="services"
+      />
+
+      {connection.state === 'ready' ? (
+        <PrimaryButton
+          label="Inspect GATT"
+          onPress={() =>
+            navigation.navigate('GattInspector', { deviceId: params.deviceId })
+          }
+          testID="inspect-gatt"
+        />
+      ) : null}
+
       {device === undefined ? null : (
         <StatusRow
           label="Advertisement"
@@ -204,6 +231,35 @@ function presentSignal(
     };
   }
   return { value: 'Unknown', detail: 'No signal strength has been reported yet.' };
+}
+
+function presentServices(
+  isReady: boolean,
+  status: ReturnType<ReturnType<typeof useGatt>['statusOf']>,
+): SignalPresentation {
+  if (!isReady) {
+    return { value: '—', detail: 'Connect to discover services.' };
+  }
+  switch (status.phase) {
+    case 'idle':
+    case 'discovering':
+      return { value: 'Discovering', detail: 'Reading the service table.' };
+    case 'failed':
+      return {
+        value: 'Unavailable',
+        detail: `${status.error.message} (${status.error.code})`,
+      };
+    case 'ready': {
+      const characteristics = status.services.reduce(
+        (count, service) => count + service.characteristics.length,
+        0,
+      );
+      return {
+        value: String(status.services.length),
+        detail: `${characteristics} characteristics across ${status.services.length} services.`,
+      };
+    }
+  }
 }
 
 function describeQuality(rssi: number): string {

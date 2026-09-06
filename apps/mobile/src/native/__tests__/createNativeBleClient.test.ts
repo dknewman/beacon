@@ -20,6 +20,7 @@ type SpecOverrides = Partial<
     | 'connect'
     | 'disconnect'
     | 'readRssi'
+    | 'discoverServices'
   >
 >;
 
@@ -66,6 +67,16 @@ function createFakeSpec(overrides: SpecOverrides = {}) {
     connect: () => Promise.resolve(),
     disconnect: () => Promise.resolve(),
     readRssi: () => Promise.resolve(-61),
+    discoverServices: () =>
+      Promise.resolve([
+        {
+          uuid: '180d',
+          primary: true,
+          characteristics: [
+            { serviceUuid: '180d', uuid: '2a37', properties: ['notify'] },
+          ],
+        },
+      ]),
     ...overrides,
     onBluetoothStateChanged: stateChanged.emitter,
     onDeviceDiscovered: discovered.emitter,
@@ -224,6 +235,34 @@ describe('createNativeBleClient', () => {
       });
       await expect(client.disconnect('a')).rejects.toMatchObject({
         code: 'native_failure',
+      });
+    });
+
+    it('normalizes discovered services and rejects malformed tables', async () => {
+      const client = createNativeBleClient(createFakeSpec().spec);
+      await expect(client.discoverServices('a')).resolves.toEqual([
+        {
+          uuid: '0000180D-0000-1000-8000-00805F9B34FB',
+          primary: true,
+          characteristics: [
+            {
+              serviceUuid: '0000180D-0000-1000-8000-00805F9B34FB',
+              uuid: '00002A37-0000-1000-8000-00805F9B34FB',
+              properties: ['notify'],
+            },
+          ],
+        },
+      ]);
+      const { spec } = createFakeSpec({
+        discoverServices: () =>
+          Promise.resolve([
+            { uuid: '180D', primary: true, characteristics: [{ uuid: '2A37' }] },
+          ] as never),
+      });
+      await expect(
+        createNativeBleClient(spec).discoverServices('a'),
+      ).rejects.toMatchObject({
+        code: 'invalid_payload',
       });
     });
 
