@@ -34,8 +34,9 @@ from a TypeScript spec. The project requires a narrow, typed, validated boundary
 
 ## Consequences
 
-- App-level codegen places the Android spec in `com.facebook.fbreact.specs`; the
-  `javaPackageName` setting applies to library codegen only.
+- The Android spec is generated into `codegenConfig.android.javaPackageName`
+  (`com.beacon.bluetooth.spec`) by the Gradle plugin. The standalone codegen script ignores that
+  setting for apps, so Kotlin must be validated against the Gradle build, not the script.
 - Adding a bridge method touches the spec, the wrapper, Swift, ObjC++ and Kotlin. That is
   accepted; the cost is the same on every milestone and keeps the boundary reviewable.
 - Codegen runs during native builds; generated files are not committed.

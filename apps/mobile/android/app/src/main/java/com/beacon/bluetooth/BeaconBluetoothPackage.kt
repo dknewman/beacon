@@ -1,6 +1,6 @@
 package com.beacon.bluetooth
 
-import com.facebook.fbreact.specs.NativeBeaconBluetoothSpec
+import com.beacon.bluetooth.spec.NativeBeaconBluetoothSpec
 import com.facebook.react.BaseReactPackage
 import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext
