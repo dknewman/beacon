@@ -13,6 +13,13 @@ project = Xcodeproj::Project.open(project_path)
 
 app_target = project.targets.find { |t| t.name == 'Beacon' } or abort 'Beacon target not found'
 
+# The app's bundle identifier. Unique per Apple developer team, so signing with a personal
+# team works out of the box; the test bundle derives its identifier from it.
+APP_BUNDLE_IDENTIFIER = 'dev.dknewman.beacon'
+app_target.build_configurations.each do |config|
+  config.build_settings['PRODUCT_BUNDLE_IDENTIFIER'] = APP_BUNDLE_IDENTIFIER
+end
+
 def ensure_group(parent, name, path)
   parent.children.find { |c| c.display_name == name } || parent.new_group(name, path)
 end
@@ -55,7 +62,7 @@ end
 # for the test target; Xcode's own defaults for unit test bundles are reproduced here.
 TEST_TARGET_SETTINGS = {
   'PRODUCT_NAME' => '$(TARGET_NAME)',
-  'PRODUCT_BUNDLE_IDENTIFIER' => 'com.beacon.BeaconBluetoothTests',
+  'PRODUCT_BUNDLE_IDENTIFIER' => "#{APP_BUNDLE_IDENTIFIER}.BeaconBluetoothTests",
   'BUNDLE_LOADER' => '$(TEST_HOST)',
   'TEST_HOST' => '$(BUILT_PRODUCTS_DIR)/Beacon.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Beacon',
   'GENERATE_INFOPLIST_FILE' => 'YES',

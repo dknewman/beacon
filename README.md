@@ -189,6 +189,11 @@ pending until the test settles it.
 Requirements: Node 22.11+, yarn 1.22, Xcode 16+ with CocoaPods (iOS), Android Studio with SDK 37,
 NDK 27 and JDK 17+ (Android).
 
+iOS signing: the app's bundle identifier is `dev.dknewman.beacon` (set by
+`scripts/ios/sync-xcode-project.rb`, which also derives the test bundle's identifier). Select
+your team under Signing & Capabilities and Xcode registers the App ID and a managed profile; a
+personal Apple ID is enough for running on your own iPhone.
+
 Lockfiles are part of the build contract: `yarn.lock` and `apps/mobile/Gemfile.lock` are
 committed, and `apps/mobile/ios/Podfile.lock` must be committed after the first successful
 `pod install` so CI and every machine resolve the same pods.
