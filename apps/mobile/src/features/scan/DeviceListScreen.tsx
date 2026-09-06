@@ -1,26 +1,30 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { FlatList, StyleSheet, Text, View } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import type { RootNavigation } from '../../app/navigation/RootNavigator';
 import { PrimaryButton } from '../../components/PrimaryButton';
 import { useTheme } from '../../theme/useTheme';
 import { ReadinessPanel } from '../bluetooth/ReadinessPanel';
-import { useBluetoothReadiness } from '../bluetooth/useBluetoothReadiness';
+import { useConnections } from '../connection/ConnectionProvider';
 import type { CachedDevice } from './deviceCache';
 import { applyDeviceFilters, emptyDeviceFilters, isFiltering } from './deviceFilters';
 import { DeviceRow } from './DeviceRow';
 import { FilterBar } from './FilterBar';
 import { presentScanButton, presentScanSummary } from './scanPresentation';
-import { useScanCoordinator } from './useScanCoordinator';
+import { useBluetoothSession } from './ScanProvider';
 
 /**
- * Home screen from M2 (PROJECT.md 10): readiness at the top, one scan control,
+ * Home screen (PROJECT.md 10): readiness at the top, one scan control,
  * filters, and the deduplicated device list sorted by signal strength.
+ * Tapping a row opens the device detail; the scan keeps running underneath.
  */
 export function DeviceListScreen(): React.JSX.Element {
   const insets = useSafeAreaInsets();
   const theme = useTheme();
-  const bluetooth = useBluetoothReadiness();
-  const scan = useScanCoordinator(bluetooth.readiness);
+  const navigation = useNavigation<RootNavigation>();
+  const { bluetooth, scan } = useBluetoothSession();
+  const { connections } = useConnections();
   const [filters, setFilters] = useState(emptyDeviceFilters);
 
   const devices = useMemo(
@@ -43,9 +47,21 @@ export function DeviceListScreen(): React.JSX.Element {
     }
   }, [button.intent, scan]);
 
+  const openDevice = useCallback(
+    (deviceId: string) => navigation.navigate('DeviceDetail', { deviceId }),
+    [navigation],
+  );
+
   const renderItem = useCallback(
-    ({ item }: { item: CachedDevice }) => <DeviceRow device={item} now={scan.now} />,
-    [scan.now],
+    ({ item }: { item: CachedDevice }) => (
+      <DeviceRow
+        device={item}
+        now={scan.now}
+        connectionState={connections[item.id]?.state ?? 'disconnected'}
+        onPress={openDevice}
+      />
+    ),
+    [scan.now, connections, openDevice],
   );
 
   return (

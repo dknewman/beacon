@@ -4,6 +4,7 @@ import { createNativeBleClient } from '../createNativeBleClient';
 import type {
   BleErrorEvent,
   BluetoothStateChangedEvent,
+  ConnectionStateChangedEvent,
   DeviceDiscoveredEvent,
   Spec,
 } from '../specs/NativeBeaconBluetooth';
@@ -16,6 +17,9 @@ type SpecOverrides = Partial<
     | 'requestPermission'
     | 'startScan'
     | 'stopScan'
+    | 'connect'
+    | 'disconnect'
+    | 'readRssi'
   >
 >;
 
@@ -47,6 +51,7 @@ function createEmitter<T>() {
 function createFakeSpec(overrides: SpecOverrides = {}) {
   const stateChanged = createEmitter<BluetoothStateChangedEvent>();
   const discovered = createEmitter<DeviceDiscoveredEvent>();
+  const connection = createEmitter<ConnectionStateChangedEvent>();
   const errors = createEmitter<BleErrorEvent>();
   const startScanCalls: Array<{ serviceUuids: string[]; allowDuplicates: boolean }> = [];
   const spec: Spec = {
@@ -58,9 +63,13 @@ function createFakeSpec(overrides: SpecOverrides = {}) {
       return Promise.resolve();
     },
     stopScan: () => Promise.resolve(),
+    connect: () => Promise.resolve(),
+    disconnect: () => Promise.resolve(),
+    readRssi: () => Promise.resolve(-61),
     ...overrides,
     onBluetoothStateChanged: stateChanged.emitter,
     onDeviceDiscovered: discovered.emitter,
+    onConnectionStateChanged: connection.emitter,
     onBleError: errors.emitter,
   };
   return {
@@ -68,8 +77,10 @@ function createFakeSpec(overrides: SpecOverrides = {}) {
     startScanCalls,
     emitState: stateChanged.emit,
     emitDevice: discovered.emit,
+    emitConnection: connection.emit,
     emitError: errors.emit,
-    handlerCount: () => stateChanged.count() + discovered.count() + errors.count(),
+    handlerCount: () =>
+      stateChanged.count() + discovered.count() + connection.count() + errors.count(),
   };
 }
 
@@ -201,6 +212,31 @@ describe('createNativeBleClient', () => {
     });
   });
 
+  describe('connections', () => {
+    it('maps connect rejections to connection_failed by default', async () => {
+      const { spec } = createFakeSpec({
+        connect: () => Promise.reject(new Error('GATT 133')),
+        disconnect: () => Promise.reject(new Error('gone')),
+      });
+      const client = createNativeBleClient(spec);
+      await expect(client.connect('a')).rejects.toMatchObject({
+        code: 'connection_failed',
+      });
+      await expect(client.disconnect('a')).rejects.toMatchObject({
+        code: 'native_failure',
+      });
+    });
+
+    it('validates RSSI reads', async () => {
+      const good = createNativeBleClient(createFakeSpec().spec);
+      await expect(good.readRssi('a')).resolves.toBe(-61);
+      const { spec } = createFakeSpec({ readRssi: () => Promise.resolve(127) });
+      await expect(createNativeBleClient(spec).readRssi('a')).rejects.toMatchObject({
+        code: 'invalid_payload',
+      });
+    });
+  });
+
   describe('events', () => {
     it('delivers validated state change events', () => {
       const fake = createFakeSpec();
@@ -236,6 +272,25 @@ describe('createNativeBleClient', () => {
           },
         },
       ]);
+    });
+
+    it('delivers validated connection transitions and rejects unknown states', () => {
+      const fake = createFakeSpec();
+      const client = createNativeBleClient(fake.spec);
+      const received: NativeBleEvent[] = [];
+      client.subscribe(event => received.push(event));
+
+      fake.emitConnection({ deviceId: 'a', state: 'ready' });
+      fake.emitConnection({ deviceId: 'a', state: 'STATE_CONNECTED' });
+      expect(received[0]).toEqual({
+        type: 'connection.state_changed',
+        deviceId: 'a',
+        state: 'ready',
+      });
+      expect(received[1]).toMatchObject({
+        type: 'ble.error',
+        error: { code: 'invalid_payload' },
+      });
     });
 
     it('delivers native error events with their contract code', () => {
@@ -286,7 +341,7 @@ describe('createNativeBleClient', () => {
       const fake = createFakeSpec();
       const client = createNativeBleClient(fake.spec);
       const unsubscribe = client.subscribe(() => {});
-      expect(fake.handlerCount()).toBe(3);
+      expect(fake.handlerCount()).toBe(4);
       unsubscribe();
       expect(fake.handlerCount()).toBe(0);
     });

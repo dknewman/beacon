@@ -1,8 +1,8 @@
 import CoreBluetooth
 import Foundation
 
-/// Owns the `CBCentralManager` and is the single source of truth for adapter state and scanning
-/// on iOS.
+/// Owns the `CBCentralManager` and is the single source of truth for adapter state, scanning
+/// and connections on iOS (PROJECT.md 27).
 ///
 /// Exposed to Objective-C++ (`BeaconBluetoothModule.mm`) so the Turbo Module can stay a thin
 /// adapter. All CoreBluetooth work happens on a private serial queue; callbacks into the
@@ -20,8 +20,12 @@ public final class BluetoothManager: NSObject {
   /// Called for each throttled advertisement with a `DiscoveredPeripheral.payload`.
   @objc public var onDeviceDiscovered: (([String: Any]) -> Void)?
 
-  /// Called for asynchronous failures with a `BleError.payload` (no `deviceId` in M2).
-  @objc public var onError: (([String: Any]) -> Void)?
+  /// Called for every connection transition with the device id and `BleConnectionState.rawValue`.
+  @objc public var onConnectionStateChanged: ((String, String) -> Void)?
+
+  /// Called for asynchronous failures with an optional device id and a `BleError.payload`.
+  /// Device errors are always sent before the `disconnected` transition they cause.
+  @objc public var onError: ((String?, [String: Any]) -> Void)?
 
   private let queue = DispatchQueue(label: "com.beacon.bluetooth.central", qos: .userInitiated)
   private lazy var centralDelegate = CentralDelegateProxy(owner: self)
@@ -37,6 +41,13 @@ public final class BluetoothManager: NSObject {
   private var isScanning = false
   private var lastReportedAt: [UUID: Date] = [:]
 
+  /// Peripherals seen by the scanner, retained so they can be connected later. CoreBluetooth
+  /// only keeps a `CBPeripheral` alive while something references it.
+  private var discoveredPeripherals: [UUID: CBPeripheral] = [:]
+
+  /// One session per peripheral that has been connected or is connecting.
+  private var sessions: [UUID: PeripheralSession] = [:]
+
   /// Minimum spacing between two discovery events for the same peripheral. Real peripherals
   /// advertise every 20 ms to 1 s; the list only needs a few updates per second.
   private let discoveryThrottle: TimeInterval = 0.3
@@ -44,6 +55,8 @@ public final class BluetoothManager: NSObject {
   /// Upper bound on how long a state request may wait for `centralManagerDidUpdateState`.
   /// CoreBluetooth reports promptly; this only guarantees the JS promise always settles.
   private let initialStateTimeout: DispatchTimeInterval = .seconds(3)
+
+  // MARK: - Adapter state and permission
 
   /// Resolves with the current adapter state, waiting for CoreBluetooth's first state report
   /// if the central manager was just created.
@@ -108,6 +121,8 @@ public final class BluetoothManager: NSObject {
     }
   }
 
+  // MARK: - Scanning
+
   /// Starts scanning. Completes with `nil` on success or a `BleError.payload` dictionary.
   ///
   /// `serviceUuids` may use 16-bit, 32-bit or 128-bit forms; an empty list scans for every
@@ -119,21 +134,9 @@ public final class BluetoothManager: NSObject {
     completion: @escaping ([String: Any]?) -> Void
   ) {
     queue.async { [self] in
-      guard !isInvalidated else {
-        completion(BleError(code: .nativeFailure, message: "Bluetooth module has been invalidated").payload)
+      if let error = authorizationError() {
+        completion(error.payload)
         return
-      }
-      switch CBManager.authorization {
-      case .notDetermined:
-        completion(BleError(code: .permissionDenied, message: "Bluetooth permission has not been requested").payload)
-        return
-      case .denied, .restricted:
-        completion(BleError(code: .permissionDenied, message: "Bluetooth permission was denied").payload)
-        return
-      case .allowedAlways:
-        break
-      @unknown default:
-        break
       }
 
       var uuids: [CBUUID] = []
@@ -145,18 +148,9 @@ public final class BluetoothManager: NSObject {
         uuids.append(uuid)
       }
 
-      let central = ensureCentral()
-      let begin = { [weak self] in
+      whenAdapterStateKnown { [weak self] central in
         guard let self else { return }
         completion(self.beginScan(on: central, serviceUuids: uuids, allowDuplicates: allowDuplicates))
-      }
-      if hasReceivedInitialState {
-        begin()
-        return
-      }
-      pendingScanStarts.append(begin)
-      queue.asyncAfter(deadline: .now() + initialStateTimeout) { [weak self] in
-        self?.flushPendingScanStarts(onlyIfStillWaiting: true)
       }
     }
   }
@@ -169,11 +163,113 @@ public final class BluetoothManager: NSObject {
     }
   }
 
+  // MARK: - Connections
+
+  /// Connects to a peripheral and discovers its services. Completes with `nil` once the
+  /// session is `ready`, or with a `BleError.payload`. A second call while an attempt is in
+  /// progress joins it; a call on a ready session completes immediately.
+  @objc public func connect(_ deviceId: String, completion: @escaping ([String: Any]?) -> Void) {
+    queue.async { [self] in
+      if let error = authorizationError() {
+        completion(error.payload)
+        return
+      }
+      guard let uuid = UUID(uuidString: deviceId) else {
+        completion(BleError(code: .deviceNotFound, message: "Not a peripheral identifier: \(deviceId)").payload)
+        return
+      }
+      whenAdapterStateKnown { [weak self] central in
+        guard let self else { return }
+        if let error = self.radioError(for: central) {
+          completion(error.payload)
+          return
+        }
+        guard let session = self.session(for: uuid, central: central) else {
+          completion(BleError(code: .deviceNotFound, message: "No peripheral with identifier \(deviceId)").payload)
+          return
+        }
+        switch session.state {
+        case .ready:
+          completion(nil)
+        case .connecting, .connected, .discoveringServices:
+          session.pendingConnects.append(completion)
+        case .disconnecting:
+          completion(BleError(code: .connectionFailed, message: "The peripheral is still disconnecting").payload)
+        case .disconnected, .failed:
+          session.disconnectRequested = false
+          session.pendingConnects.append(completion)
+          self.transition(session, to: .connecting)
+          central.connect(session.peripheral, options: nil)
+        }
+      }
+    }
+  }
+
+  /// Disconnects, or cancels an attempt in progress. Completes once the link is gone; completes
+  /// immediately when there is no session or it is already disconnected.
+  @objc public func disconnect(_ deviceId: String, completion: @escaping () -> Void) {
+    queue.async { [self] in
+      guard let uuid = UUID(uuidString: deviceId), let session = sessions[uuid],
+        session.state != .disconnected, session.state != .failed
+      else {
+        completion()
+        return
+      }
+      session.pendingDisconnects.append(completion)
+      session.disconnectRequested = true
+      if session.state == .disconnecting {
+        return
+      }
+      if session.state == .connecting {
+        // CoreBluetooth does not promise a delegate callback for a cancelled pending
+        // connection, so the cancellation is reported here and a late callback is a no-op.
+        central?.cancelPeripheralConnection(session.peripheral)
+        finish(session, error: nil)
+        return
+      }
+      transition(session, to: .disconnecting)
+      central?.cancelPeripheralConnection(session.peripheral)
+    }
+  }
+
+  /// Reads the RSSI of a connected peripheral. Completes with the value or a `BleError.payload`.
+  @objc public func readRssi(
+    _ deviceId: String,
+    completion: @escaping (NSNumber?, [String: Any]?) -> Void
+  ) {
+    queue.async { [self] in
+      guard let uuid = UUID(uuidString: deviceId), let session = sessions[uuid],
+        session.peripheral.state == .connected
+      else {
+        completion(nil, BleError(code: .disconnected, message: "Not connected to \(deviceId)").payload)
+        return
+      }
+      let wasIdle = session.pendingRssiReads.isEmpty
+      session.pendingRssiReads.append(completion)
+      if wasIdle {
+        session.peripheral.readRSSI()
+      }
+    }
+  }
+
+  // MARK: - Lifecycle
+
   /// Releases CoreBluetooth resources. Called when the React instance is torn down.
   @objc public func invalidate() {
     queue.async { [self] in
       isInvalidated = true
       endScan()
+      for session in sessions.values {
+        if session.peripheral.state != .disconnected {
+          central?.cancelPeripheralConnection(session.peripheral)
+        }
+        session.detach()
+        session.settleConnects(with: BleError(code: .disconnected, message: "Bluetooth module invalidated").payload)
+        session.settleDisconnects()
+        session.settleRssiReads(with: nil, error: BleError(code: .disconnected, message: "Bluetooth module invalidated").payload)
+      }
+      sessions.removeAll()
+      discoveredPeripherals.removeAll()
       central?.delegate = nil
       central = nil
       flushPendingRequests(with: .unknown, onlyIfStillWaiting: false)
@@ -181,11 +277,12 @@ public final class BluetoothManager: NSObject {
       flushPendingScanStarts(onlyIfStillWaiting: false)
       onStateChanged = nil
       onDeviceDiscovered = nil
+      onConnectionStateChanged = nil
       onError = nil
     }
   }
 
-  // MARK: - Private
+  // MARK: - Private: central
 
   private func ensureCentral() -> CBCentralManager {
     if let central {
@@ -200,30 +297,69 @@ public final class BluetoothManager: NSObject {
     return created
   }
 
+  /// Runs `body` once the adapter state is known, creating the central if needed. Times out
+  /// like `getBluetoothState` so every caller settles.
+  private func whenAdapterStateKnown(_ body: @escaping (CBCentralManager) -> Void) {
+    let central = ensureCentral()
+    if hasReceivedInitialState {
+      body(central)
+      return
+    }
+    pendingScanStarts.append { body(central) }
+    queue.asyncAfter(deadline: .now() + initialStateTimeout) { [weak self] in
+      self?.flushPendingScanStarts(onlyIfStillWaiting: true)
+    }
+  }
+
+  private func authorizationError() -> BleError? {
+    guard !isInvalidated else {
+      return BleError(code: .nativeFailure, message: "Bluetooth module has been invalidated")
+    }
+    switch CBManager.authorization {
+    case .notDetermined:
+      return BleError(code: .permissionDenied, message: "Bluetooth permission has not been requested")
+    case .denied, .restricted:
+      return BleError(code: .permissionDenied, message: "Bluetooth permission was denied")
+    case .allowedAlways:
+      return nil
+    @unknown default:
+      return nil
+    }
+  }
+
+  /// Why the radio cannot be used right now, or nil when it is powered on.
+  private func radioError(for central: CBCentralManager) -> BleError? {
+    guard !isInvalidated else {
+      return BleError(code: .nativeFailure, message: "Bluetooth module has been invalidated")
+    }
+    switch central.state {
+    case .poweredOn:
+      return nil
+    case .poweredOff:
+      return BleError(code: .bluetoothPoweredOff, message: "Bluetooth is powered off")
+    case .unsupported:
+      return BleError(code: .bluetoothUnsupported, message: "This device does not support Bluetooth Low Energy")
+    case .unauthorized:
+      return BleError(code: .permissionDenied, message: "Bluetooth permission was denied")
+    case .resetting:
+      return BleError(code: .nativeFailure, message: "The Bluetooth system is resetting")
+    case .unknown:
+      return BleError(code: .nativeFailure, message: "Bluetooth state is not known yet")
+    @unknown default:
+      return BleError(code: .nativeFailure, message: "Unrecognized Bluetooth state")
+    }
+  }
+
+  // MARK: - Private: scanning
+
   /// Runs on the queue once the adapter state is known. Returns nil on success.
   private func beginScan(
     on central: CBCentralManager,
     serviceUuids: [CBUUID],
     allowDuplicates: Bool
   ) -> [String: Any]? {
-    guard !isInvalidated else {
-      return BleError(code: .nativeFailure, message: "Bluetooth module has been invalidated").payload
-    }
-    switch central.state {
-    case .poweredOn:
-      break
-    case .poweredOff:
-      return BleError(code: .bluetoothPoweredOff, message: "Bluetooth is powered off").payload
-    case .unsupported:
-      return BleError(code: .bluetoothUnsupported, message: "This device does not support Bluetooth Low Energy").payload
-    case .unauthorized:
-      return BleError(code: .permissionDenied, message: "Bluetooth permission was denied").payload
-    case .resetting:
-      return BleError(code: .nativeFailure, message: "The Bluetooth system is resetting").payload
-    case .unknown:
-      return BleError(code: .nativeFailure, message: "Bluetooth state is not known yet").payload
-    @unknown default:
-      return BleError(code: .nativeFailure, message: "Unrecognized Bluetooth state").payload
+    if let error = radioError(for: central) {
+      return error.payload
     }
     if isScanning {
       return nil
@@ -244,6 +380,53 @@ public final class BluetoothManager: NSObject {
     isScanning = false
     lastReportedAt.removeAll()
   }
+
+  // MARK: - Private: sessions
+
+  private func session(for uuid: UUID, central: CBCentralManager) -> PeripheralSession? {
+    if let existing = sessions[uuid] {
+      return existing
+    }
+    let peripheral = discoveredPeripherals[uuid]
+      ?? central.retrievePeripherals(withIdentifiers: [uuid]).first
+    guard let peripheral else { return nil }
+    let session = PeripheralSession(peripheral: peripheral)
+    session.attach(owner: self)
+    sessions[uuid] = session
+    return session
+  }
+
+  private func transition(_ session: PeripheralSession, to state: BleConnectionState) {
+    guard session.transition(to: state) else { return }
+    onConnectionStateChanged?(session.peripheral.identifier.uuidString, state.rawValue)
+  }
+
+  private func emitError(_ error: BleError, for session: PeripheralSession) {
+    onError?(session.peripheral.identifier.uuidString, error.payload)
+  }
+
+  /// Ends a session. A non-nil `error` is a failure or remote disconnect and is emitted before
+  /// the `disconnected` transition; nil is a disconnect JavaScript asked for.
+  private func finish(_ session: PeripheralSession, error: BleError?) {
+    if let error {
+      emitError(error, for: session)
+      session.settleConnects(with: error.payload)
+    } else {
+      session.settleConnects(with: BleError(code: .disconnected, message: "Connection cancelled").payload)
+    }
+    session.settleRssiReads(with: nil, error: BleError(code: .disconnected, message: "The connection ended").payload)
+    session.disconnectRequested = false
+    transition(session, to: .disconnected)
+    session.settleDisconnects()
+  }
+
+  private func dropAllSessions(reason: BleError) {
+    for session in sessions.values where session.state != .disconnected {
+      finish(session, error: reason)
+    }
+  }
+
+  // MARK: - Private: pending completions
 
   private func flushPendingRequests(with state: BleAdapterState, onlyIfStillWaiting: Bool) {
     if onlyIfStillWaiting, hasReceivedInitialState {
@@ -270,15 +453,20 @@ public final class BluetoothManager: NSObject {
     starts.forEach { $0() }
   }
 
+  // MARK: - Central delegate handling (on queue)
+
   fileprivate func handleCentralStateUpdate(_ central: CBCentralManager) {
     guard !isInvalidated else { return }
     let state = BluetoothStateMapper.map(central.state)
     hasReceivedInitialState = true
-    if state != .poweredOn, isScanning {
-      // CoreBluetooth has already dropped the scan; JavaScript sees the adapter event,
-      // stops the coordinator, and restarts explicitly when the user asks again.
-      isScanning = false
-      lastReportedAt.removeAll()
+    if state != .poweredOn {
+      if isScanning {
+        // CoreBluetooth has already dropped the scan; JavaScript sees the adapter event,
+        // stops the coordinator, and restarts explicitly when the user asks again.
+        isScanning = false
+        lastReportedAt.removeAll()
+      }
+      dropAllSessions(reason: BleError(code: .bluetoothPoweredOff, message: "Bluetooth is no longer available"))
     }
     flushPendingRequests(with: state, onlyIfStillWaiting: false)
     if CBManager.authorization != .notDetermined {
@@ -294,6 +482,7 @@ public final class BluetoothManager: NSObject {
     rssi: NSNumber
   ) {
     guard isScanning, !isInvalidated else { return }
+    discoveredPeripherals[peripheral.identifier] = peripheral
     let now = Date()
     if let last = lastReportedAt[peripheral.identifier], now.timeIntervalSince(last) < discoveryThrottle {
       return
@@ -307,6 +496,59 @@ public final class BluetoothManager: NSObject {
       seenAt: now
     )
     onDeviceDiscovered?(device.payload)
+  }
+
+  fileprivate func handleConnect(_ peripheral: CBPeripheral) {
+    guard let session = sessions[peripheral.identifier], session.state == .connecting else { return }
+    transition(session, to: .connected)
+    transition(session, to: .discoveringServices)
+    peripheral.discoverServices(nil)
+  }
+
+  fileprivate func handleFailToConnect(_ peripheral: CBPeripheral, error: Error?) {
+    guard let session = sessions[peripheral.identifier], session.state != .disconnected else { return }
+    let bleError = error.map { BleError.from($0, fallback: .connectionFailed) }
+      ?? BleError(code: .connectionFailed, message: "The peripheral did not accept the connection")
+    finish(session, error: bleError)
+  }
+
+  fileprivate func handleDisconnect(_ peripheral: CBPeripheral, error: Error?) {
+    guard let session = sessions[peripheral.identifier], session.state != .disconnected else { return }
+    if session.disconnectRequested {
+      finish(session, error: nil)
+      return
+    }
+    let bleError = error.map { BleError.from($0, fallback: .disconnected) }
+      ?? BleError(code: .disconnected, message: "The peripheral closed the connection")
+    finish(session, error: bleError)
+  }
+}
+
+// MARK: - PeripheralSessionOwner (peripheral delegate callbacks, on queue)
+
+extension BluetoothManager: PeripheralSessionOwner {
+  func session(_ session: PeripheralSession, didDiscoverServices error: Error?) {
+    guard session.state == .discoveringServices else { return }
+    if let error {
+      let bleError = BleError.from(error, fallback: .serviceNotFound)
+      emitError(bleError, for: session)
+      session.settleConnects(with: bleError.payload)
+      // A link without services is useless; close it cleanly (the error is already out).
+      session.disconnectRequested = true
+      transition(session, to: .disconnecting)
+      central?.cancelPeripheralConnection(session.peripheral)
+      return
+    }
+    transition(session, to: .ready)
+    session.settleConnects(with: nil)
+  }
+
+  func session(_ session: PeripheralSession, didReadRSSI rssi: NSNumber, error: Error?) {
+    if let error {
+      session.settleRssiReads(with: nil, error: BleError.from(error, fallback: .readFailed).payload)
+    } else {
+      session.settleRssiReads(with: rssi, error: nil)
+    }
   }
 }
 
@@ -334,5 +576,25 @@ private final class CentralDelegateProxy: NSObject, CBCentralManagerDelegate {
     rssi RSSI: NSNumber
   ) {
     owner.handleDiscovery(peripheral, advertisementData: advertisementData, rssi: RSSI)
+  }
+
+  func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+    owner.handleConnect(peripheral)
+  }
+
+  func centralManager(
+    _ central: CBCentralManager,
+    didFailToConnect peripheral: CBPeripheral,
+    error: Error?
+  ) {
+    owner.handleFailToConnect(peripheral, error: error)
+  }
+
+  func centralManager(
+    _ central: CBCentralManager,
+    didDisconnectPeripheral peripheral: CBPeripheral,
+    error: Error?
+  ) {
+    owner.handleDisconnect(peripheral, error: error)
   }
 }

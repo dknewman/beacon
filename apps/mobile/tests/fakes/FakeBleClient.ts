@@ -18,6 +18,9 @@ interface PendingCalls {
   permissionRequest: Deferred<BlePermissionState>[];
   startScan: Deferred<void>[];
   stopScan: Deferred<void>[];
+  connect: Deferred<void>[];
+  disconnect: Deferred<void>[];
+  readRssi: Deferred<number>[];
 }
 
 /**
@@ -34,6 +37,9 @@ export class FakeBleClient implements BleClient {
     permissionRequest: [],
     startScan: [],
     stopScan: [],
+    connect: [],
+    disconnect: [],
+    readRssi: [],
   };
 
   getBluetoothStateCalls = 0;
@@ -41,6 +47,9 @@ export class FakeBleClient implements BleClient {
   requestPermissionCalls = 0;
   startScanCalls: ScanOptions[] = [];
   stopScanCalls = 0;
+  connectCalls: string[] = [];
+  disconnectCalls: string[] = [];
+  readRssiCalls: string[] = [];
 
   getBluetoothState(): Promise<BluetoothState> {
     this.getBluetoothStateCalls += 1;
@@ -65,6 +74,21 @@ export class FakeBleClient implements BleClient {
   stopScan(): Promise<void> {
     this.stopScanCalls += 1;
     return this.defer('stopScan');
+  }
+
+  connect(deviceId: string): Promise<void> {
+    this.connectCalls.push(deviceId);
+    return this.defer('connect');
+  }
+
+  disconnect(deviceId: string): Promise<void> {
+    this.disconnectCalls.push(deviceId);
+    return this.defer('disconnect');
+  }
+
+  readRssi(deviceId: string): Promise<number> {
+    this.readRssiCalls.push(deviceId);
+    return this.defer('readRssi');
   }
 
   subscribe(listener: (event: NativeBleEvent) => void): Unsubscribe {
@@ -116,6 +140,42 @@ export class FakeBleClient implements BleClient {
 
   rejectStopScan(error: unknown): void {
     this.take('stopScan').forEach(d => d.reject(error));
+  }
+
+  resolveConnect(): void {
+    this.take('connect').forEach(d => d.resolve());
+  }
+
+  rejectConnect(error: unknown): void {
+    this.take('connect').forEach(d => d.reject(error));
+  }
+
+  resolveDisconnect(): void {
+    this.take('disconnect').forEach(d => d.resolve());
+  }
+
+  rejectDisconnect(error: unknown): void {
+    this.take('disconnect').forEach(d => d.reject(error));
+  }
+
+  resolveRssi(rssi: number): void {
+    this.take('readRssi').forEach(d => d.resolve(rssi));
+  }
+
+  rejectRssi(error: unknown): void {
+    this.take('readRssi').forEach(d => d.reject(error));
+  }
+
+  /** Emits the native transition sequence for a connection that reaches `ready`. */
+  emitConnected(deviceId: string): void {
+    for (const state of [
+      'connecting',
+      'connected',
+      'discovering_services',
+      'ready',
+    ] as const) {
+      this.emit({ type: 'connection.state_changed', deviceId, state });
+    }
   }
 
   emit(event: NativeBleEvent): void {
