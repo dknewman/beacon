@@ -73,7 +73,8 @@ Handled explicitly in native code and documented at the contract:
 
 - yarn 1 workspaces hoist dependencies to the repo root.
 - Metro watches the repo root and resolves from both `apps/mobile/node_modules` and the root.
-- Gradle resolves `react-native`, `@react-native/codegen` and the RN Gradle plugin through Node
+- Gradle resolves `react-native`, `@react-native/codegen`, `hermes-compiler` (the prebuilt
+  Hermes compiler used for release bundles) and the RN Gradle plugin through Node
   (`require.resolve`) instead of hard-coded `../node_modules` paths.
 - The Podfile already resolves `react_native_pods.rb` through Node.
 - One root `tsconfig.json`, `eslint.config.js`, `babel.config.js`, and a Jest `projects` config
