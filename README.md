@@ -148,6 +148,14 @@ Lockfiles are part of the build contract: `yarn.lock` and `apps/mobile/Gemfile.l
 committed, and `apps/mobile/ios/Podfile.lock` must be committed after the first successful
 `pod install` so CI and every machine resolve the same pods.
 
+### Trying a build without a development machine
+
+Every CI run uploads `beacon-standalone-apk`, a **release** build (arm64, signed with the
+template's debug keystore) with the JavaScript bundle embedded. Download it from the run's
+Artifacts section and sideload it. A **debug** build (`yarn android`, `assembleDebug`) does not
+embed JavaScript; it loads it from Metro and shows "Unable to load script" when run without
+`yarn start` and `adb reverse tcp:8081 tcp:8081`.
+
 ```sh
 yarn install
 
