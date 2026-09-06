@@ -35,6 +35,33 @@ initializing ──native_state_received──► ready(state)
 `retry_requested` is ignored outside `failed`. Subsequent `native_state_received` actions replace
 the state in place. Implemented in `bluetoothAdapterReducer.ts` with exhaustive switches.
 
+## Permission status (`PermissionStatus`) — M1
+
+```text
+checking ──state_received──► ready(state) ──request_started──► requesting
+   │                             ▲                                 │
+   │                             └──────────state_received─────────┘
+   └──request_failed──► failed(error) ──retry_requested──► checking
+```
+
+`request_started` is idempotent while already requesting. Foreground re-checks never dispatch
+while a request is in flight, so a prompt has exactly one answer. Implemented in
+`permissionReducer.ts`.
+
+## Readiness (`BluetoothReadiness`) — M1
+
+A pure projection of the two machines above, used by the UI and, from M2, by the scan
+coordinator to decide whether scanning may start:
+
+```text
+checking | failed(error) | unsupported | permission_required(state) | permission_requesting
+| permission_blocked | powered_off | unavailable(unknown|resetting) | ready
+```
+
+Precedence is failure, unsupported, requesting, checking, permission, then adapter power.
+Implemented in `bluetoothReadiness.ts`; guidance text and the single next action per state
+live in `readinessPresentation.ts`.
+
 ## Scan state (`ScanState`) — M2
 
 ```text

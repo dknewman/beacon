@@ -3,10 +3,12 @@ package com.beacon.bluetooth
 import com.beacon.bluetooth.errors.rejectWith
 import com.beacon.bluetooth.errors.toBleError
 import com.beacon.bluetooth.mapping.BleAdapterState
+import com.beacon.bluetooth.permissions.PermissionController
 import com.beacon.bluetooth.spec.NativeBeaconBluetoothSpec
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.modules.core.PermissionAwareActivity
 
 /**
  * Turbo Native Module bridging the TypeScript spec (NativeBeaconBluetooth.ts) to
@@ -17,6 +19,7 @@ class BeaconBluetoothModule(reactContext: ReactApplicationContext) :
     NativeBeaconBluetoothSpec(reactContext), BluetoothController.Listener {
 
     private val controller = BluetoothController(reactContext.applicationContext)
+    private val permissions = PermissionController(reactContext.applicationContext)
 
     override fun initialize() {
         super.initialize()
@@ -33,6 +36,24 @@ class BeaconBluetoothModule(reactContext: ReactApplicationContext) :
             promise.resolve(controller.currentAdapterState().wireValue)
         } catch (error: Exception) {
             promise.rejectWith(error.toBleError())
+        }
+    }
+
+    override fun getPermissionState(promise: Promise) {
+        try {
+            promise.resolve(permissions.currentState(reactApplicationContext.currentActivity).wireValue)
+        } catch (error: Exception) {
+            promise.rejectWith(error.toBleError())
+        }
+    }
+
+    override fun requestPermission(promise: Promise) {
+        val activity = reactApplicationContext.currentActivity as? PermissionAwareActivity
+        permissions.request(activity) { result ->
+            result.fold(
+                onSuccess = { promise.resolve(it.wireValue) },
+                onFailure = { promise.rejectWith(it.toBleError()) },
+            )
         }
     }
 

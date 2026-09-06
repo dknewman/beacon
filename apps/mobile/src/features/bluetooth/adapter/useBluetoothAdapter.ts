@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useState } from 'react';
 import { toBleError } from '@beacon/ble-contracts';
-import { useBluetoothAdapterClient } from '../../../native/BleClientContext';
+import { useBleClient } from '../../../native/BleClientContext';
 import {
   bluetoothAdapterReducer,
   initialBluetoothAdapterStatus,
@@ -20,7 +20,7 @@ export interface BluetoothAdapterHandle {
  * arrive after unmount (or after a retry restarted the effect) are ignored.
  */
 export function useBluetoothAdapter(): BluetoothAdapterHandle {
-  const client = useBluetoothAdapterClient();
+  const client = useBleClient();
   const [status, dispatch] = useReducer(
     bluetoothAdapterReducer,
     initialBluetoothAdapterStatus,

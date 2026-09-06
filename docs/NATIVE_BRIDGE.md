@@ -11,6 +11,8 @@ domain typing and validation happen on the JavaScript side.
 ```ts
 export interface Spec extends TurboModule {
   getBluetoothState(): Promise<string>;
+  getPermissionState(): Promise<string>;
+  requestPermission(): Promise<string>;
   readonly onBluetoothStateChanged: CodegenTypes.EventEmitter<{ state: string }>;
 }
 export default TurboModuleRegistry.getEnforcing<Spec>('BeaconBluetooth');
@@ -25,9 +27,9 @@ Generated artifacts (never committed):
 - iOS: `ios/build/generated/ios/ReactCodegen/BeaconBluetoothSpec/BeaconBluetoothSpec.h` defines
   `NativeBeaconBluetoothSpec` (protocol), `NativeBeaconBluetoothSpecBase` (event emitter base
   class) and `NativeBeaconBluetoothSpecJSI`.
-- Android: `com.beacon.bluetooth.spec.NativeBeaconBluetoothSpec` (abstract class with
-  `getBluetoothState(Promise)` and `emitOnBluetoothStateChanged(ReadableMap)`). The package
-  comes from `codegenConfig.android.javaPackageName`, which the Gradle plugin honors.
+- Android: `com.beacon.bluetooth.spec.NativeBeaconBluetoothSpec` (abstract class with one
+  `Promise` method per spec method and `emitOnBluetoothStateChanged(ReadableMap)`). The
+  package comes from `codegenConfig.android.javaPackageName`, which the Gradle plugin honors.
 
 The iOS and Android builds run codegen automatically. The standalone
 `react-native codegen` command also works for inspection, but note that it ignores

@@ -38,6 +38,20 @@
   }];
 }
 
+- (void)getPermissionState:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject
+{
+  [self.manager getPermissionState:^(NSString *state) {
+    resolve(state);
+  }];
+}
+
+- (void)requestPermission:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject
+{
+  [self.manager requestPermission:^(NSString *state) {
+    resolve(state);
+  }];
+}
+
 - (void)invalidate
 {
   [self.manager invalidate];

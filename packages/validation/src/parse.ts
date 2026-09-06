@@ -1,6 +1,7 @@
 import {
   BleError,
   type BleErrorCode,
+  type BlePermissionState,
   type BluetoothState,
   type NativeBleEvent,
 } from '@beacon/ble-contracts';
@@ -8,6 +9,7 @@ import type { z } from 'zod';
 import { fail, ok, type ValidationResult } from './result';
 import { bluetoothStateSchema } from './schemas/bluetooth-state';
 import { nativeBleEventSchema } from './schemas/native-events';
+import { blePermissionStateSchema } from './schemas/permissions';
 
 /**
  * Runs a schema and converts failures into a BleError with code "invalid_payload".
@@ -36,6 +38,16 @@ export function parseBluetoothState(
   input: unknown,
 ): ValidationResult<BluetoothState, BleError> {
   return validate(bluetoothStateSchema, input, 'Invalid Bluetooth state from native');
+}
+
+export function parseBlePermissionState(
+  input: unknown,
+): ValidationResult<BlePermissionState, BleError> {
+  return validate(
+    blePermissionStateSchema,
+    input,
+    'Invalid permission state from native',
+  );
 }
 
 export function parseNativeBleEvent(
