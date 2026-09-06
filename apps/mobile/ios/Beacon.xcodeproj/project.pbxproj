@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		0C80B921A6F3F58F76C31292 /* libPods-Beacon.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 5DCACB8F33CDC322A6C60F78 /* libPods-Beacon.a */; };
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
+		1B5602C2F1481D1ED241C1E3 /* AuthorizationMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42BECBF520039A52F44C595D /* AuthorizationMapper.swift */; };
 		1F0B215FF3649BBDC6A49694 /* BleError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C852C45C8D3EC39ACEED5DB /* BleError.swift */; };
 		289C65A63D640D5CCC5C1C23 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A0EDC16933CD824D04B98774 /* Foundation.framework */; };
 		4CEAA67EEBA84FD560C80B79 /* BluetoothStateMapperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A6942770E2E13358E905143 /* BluetoothStateMapperTests.swift */; };
@@ -16,6 +17,7 @@
 		6C25647F4E1F29BC16CBD8C9 /* BluetoothManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2009FDD8DB204A6B62CEE3B /* BluetoothManager.swift */; };
 		761780ED2CA45674006654EE /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761780EC2CA45674006654EE /* AppDelegate.swift */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
+		99B99BD953545AA43F621826 /* AuthorizationMapperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EDF5E388312ED3D2C869E2D /* AuthorizationMapperTests.swift */; };
 		B2F6989E6FD99B2DE69E27E8 /* BluetoothStateMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF3BC966D5D5CC3B1C63BC97 /* BluetoothStateMapper.swift */; };
 		BA0885F8B4CBBB1416D1BB44 /* BeaconBluetoothModule.mm in Sources */ = {isa = PBXBuildFile; fileRef = 3D1D44740C7A5CDDA19C204C /* BeaconBluetoothModule.mm */; };
 /* End PBXBuildFile section */
@@ -34,12 +36,14 @@
 		01FCE67867AA56EF01CCE332 /* BeaconBluetoothTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BeaconBluetoothTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		085D0D9EC9053A1666ECA8A5 /* BleErrorTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BleErrorTests.swift; sourceTree = "<group>"; };
 		0C852C45C8D3EC39ACEED5DB /* BleError.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BleError.swift; sourceTree = "<group>"; };
+		0EDF5E388312ED3D2C869E2D /* AuthorizationMapperTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuthorizationMapperTests.swift; sourceTree = "<group>"; };
 		13B07F961A680F5B00A75B9A /* Beacon.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Beacon.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		13B07FB51A68108700A75B9A /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = Beacon/Images.xcassets; sourceTree = "<group>"; };
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = Beacon/Info.plist; sourceTree = "<group>"; };
 		13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = PrivacyInfo.xcprivacy; path = Beacon/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		3B4392A12AC88292D35C810B /* Pods-Beacon.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Beacon.debug.xcconfig"; path = "Target Support Files/Pods-Beacon/Pods-Beacon.debug.xcconfig"; sourceTree = "<group>"; };
 		3D1D44740C7A5CDDA19C204C /* BeaconBluetoothModule.mm */ = {isa = PBXFileReference; includeInIndex = 1; path = BeaconBluetoothModule.mm; sourceTree = "<group>"; };
+		42BECBF520039A52F44C595D /* AuthorizationMapper.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuthorizationMapper.swift; sourceTree = "<group>"; };
 		5709B34CF0A7D63546082F79 /* Pods-Beacon.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Beacon.release.xcconfig"; path = "Target Support Files/Pods-Beacon/Pods-Beacon.release.xcconfig"; sourceTree = "<group>"; };
 		5DCACB8F33CDC322A6C60F78 /* libPods-Beacon.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-Beacon.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		6A6942770E2E13358E905143 /* BluetoothStateMapperTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BluetoothStateMapperTests.swift; sourceTree = "<group>"; };
@@ -99,6 +103,7 @@
 			children = (
 				6A6942770E2E13358E905143 /* BluetoothStateMapperTests.swift */,
 				085D0D9EC9053A1666ECA8A5 /* BleErrorTests.swift */,
+				0EDF5E388312ED3D2C869E2D /* AuthorizationMapperTests.swift */,
 			);
 			name = BeaconBluetoothTests;
 			path = BeaconBluetoothTests;
@@ -108,6 +113,7 @@
 			isa = PBXGroup;
 			children = (
 				CF3BC966D5D5CC3B1C63BC97 /* BluetoothStateMapper.swift */,
+				42BECBF520039A52F44C595D /* AuthorizationMapper.swift */,
 			);
 			name = Mapping;
 			path = Mapping;
@@ -362,6 +368,7 @@
 				6C25647F4E1F29BC16CBD8C9 /* BluetoothManager.swift in Sources */,
 				B2F6989E6FD99B2DE69E27E8 /* BluetoothStateMapper.swift in Sources */,
 				1F0B215FF3649BBDC6A49694 /* BleError.swift in Sources */,
+				1B5602C2F1481D1ED241C1E3 /* AuthorizationMapper.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -371,6 +378,7 @@
 			files = (
 				4CEAA67EEBA84FD560C80B79 /* BluetoothStateMapperTests.swift in Sources */,
 				694A99B77F80EEC3E5A3B4BF /* BleErrorTests.swift in Sources */,
+				99B99BD953545AA43F621826 /* AuthorizationMapperTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
