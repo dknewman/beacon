@@ -39,12 +39,14 @@ export function useBluetoothAdapter(): BluetoothAdapterHandle {
           dispatch({ type: 'native_state_received', state: event.state });
           break;
         case 'ble.error':
-          if (event.deviceId === undefined) {
+          // Errors without a device are adapter or bridge failures, except scan
+          // failures, which belong to the scan coordinator (BLE_STATE_MODEL.md).
+          if (event.deviceId === undefined && event.error.code !== 'scan_failed') {
             dispatch({ type: 'native_failed', error: toBleError(event.error) });
           }
           break;
         default:
-          // Device-scoped events are handled by later milestones' coordinators.
+          // Scan and device-scoped events are handled by their own coordinators.
           break;
       }
     });

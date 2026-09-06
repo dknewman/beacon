@@ -27,6 +27,12 @@
     _manager.onStateChanged = ^(NSString *state) {
       [weakSelf emitOnBluetoothStateChanged:@{@"state" : state}];
     };
+    _manager.onDeviceDiscovered = ^(NSDictionary<NSString *, id> *device) {
+      [weakSelf emitOnDeviceDiscovered:device];
+    };
+    _manager.onError = ^(NSDictionary<NSString *, id> *error) {
+      [weakSelf emitOnBleError:@{@"error" : error}];
+    };
   }
   return self;
 }
@@ -50,6 +56,54 @@
   [self.manager requestPermission:^(NSString *state) {
     resolve(state);
   }];
+}
+
+- (void)startScan:(NSArray *)serviceUuids
+   allowDuplicates:(BOOL)allowDuplicates
+           resolve:(RCTPromiseResolveBlock)resolve
+            reject:(RCTPromiseRejectBlock)reject
+{
+  NSMutableArray<NSString *> *uuids = [NSMutableArray arrayWithCapacity:serviceUuids.count];
+  for (id value in serviceUuids) {
+    if ([value isKindOfClass:[NSString class]]) {
+      [uuids addObject:value];
+    }
+  }
+  [self.manager startScan:uuids
+          allowDuplicates:allowDuplicates
+               completion:^(NSDictionary<NSString *, id> *error) {
+                 [BeaconBluetoothModule settle:error resolve:resolve reject:reject];
+               }];
+}
+
+- (void)stopScan:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject
+{
+  [self.manager stopScan:^(NSDictionary<NSString *, id> *error) {
+    [BeaconBluetoothModule settle:error resolve:resolve reject:reject];
+  }];
+}
+
+/// Resolves a void promise, or rejects it with the contract `code` and message from a
+/// `BleError.payload` dictionary so JavaScript's `toBleError` can read the code.
++ (void)settle:(NSDictionary<NSString *, id> *)error
+       resolve:(RCTPromiseResolveBlock)resolve
+        reject:(RCTPromiseRejectBlock)reject
+{
+  if (error == nil) {
+    resolve(nil);
+    return;
+  }
+  NSString *code = error[@"code"] ?: @"unknown";
+  NSString *message = error[@"message"] ?: code;
+  NSMutableDictionary *userInfo = [NSMutableDictionary dictionaryWithObject:message
+                                                                     forKey:NSLocalizedDescriptionKey];
+  if (error[@"nativeCode"] != nil) {
+    userInfo[@"nativeCode"] = error[@"nativeCode"];
+  }
+  if (error[@"nativeDomain"] != nil) {
+    userInfo[@"nativeDomain"] = error[@"nativeDomain"];
+  }
+  reject(code, message, [NSError errorWithDomain:@"com.beacon.bluetooth" code:0 userInfo:userInfo]);
 }
 
 - (void)invalidate

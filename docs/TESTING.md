@@ -19,9 +19,11 @@ tests).
 - Tests accompany meaningful logic (PROJECT.md 41). Pure mapping and state code is tested on
   every platform where it exists: UUID normalization, error mapping, adapter state mapping,
   reducers, validation schemas.
-- Integration tests mock native events, not modules. `FakeBluetoothAdapterClient` implements the
-  same `BluetoothAdapterApi` contract as the real bridge wrapper and is injected through the
-  composition root; no `jest.mock` of the Turbo Module is needed.
+- Integration tests mock native events, not modules. `FakeBleClient` implements the same
+  `BleClient` contract as the real bridge wrapper and is injected through the composition root;
+  no `jest.mock` of the Turbo Module is needed. Every native call stays pending until the test
+  settles it, so in-flight states (starting, stopping, asking) and races (stop during start)
+  are asserted, not assumed.
 - The bridge wrapper is tested against a hand written fake of the codegen spec, so malformed
   native payloads are exercised without a device.
 - Native tests cover the parts that can run without hardware: state and error mapping and the
@@ -29,11 +31,21 @@ tests).
 - Contract parity: the Swift and Kotlin tests assert that their wire values equal the TypeScript
   unions verbatim, so a renamed code fails on every platform.
 
-## Mock BLE layer (M10)
+## Mock BLE layer
 
-`MockBleClient` will implement the full `NativeBleClient` with scripted heart rate, battery and
-weight scale peripherals plus failure scenarios (connection failure, powered off, disconnect). It
-is a first class runtime option so reviewers can run Beacon without hardware.
+`apps/mobile/src/mock/createMockBleClient.ts` implements the M2 client surface with scripted
+peripherals that advertise on their own intervals with drifting RSSI, refuses to scan when the
+simulated radio is off or permission is missing, and exposes hooks to script failures
+(`failNextScanStart`, `failRunningScan`, `setAdapterState`). It takes an injectable scheduler,
+clock and random source, so its own tests are deterministic. It is a runtime option
+(`USE_MOCK_BLE_CLIENT` in `apps/mobile/src/app/runtimeOptions.ts`) so reviewers can run Beacon
+without hardware; M10 extends it with connections, GATT and disconnect scenarios.
+
+## Hardware validation
+
+Anything touching a real radio is validated by a person and recorded in the README milestone
+table with the device and what was observed. Nothing in this repository claims hardware
+validation that has not been performed.
 
 ## What CI runs
 
@@ -44,7 +56,8 @@ dispatch. Runs for the same ref cancel each other so only the latest push is bui
 2. `android` (ubuntu, after `js`): Android SDK 37 / NDK 27 / CMake, Gradle
    `:app:testDebugUnitTest` then `:app:assembleRelease` for arm64 (runs codegen, compiles the
    Kotlin module, bundles the JavaScript, uploads a standalone APK as an artifact that runs on
-   a phone without Metro).
+   a phone without Metro). Kotlin sources are also compiled against the generated spec and the
+   JUnit suite run on a plain JVM during development, so most compile errors never reach CI.
 3. `ios` (macOS, after `js`): Ruby 3.3 with the committed `Gemfile.lock`, `pod install` with a
    CocoaPods cache, then `xcodebuild test` on the first available iPhone simulator with code
    signing disabled. The `.xcresult` bundle is uploaded when the job fails.

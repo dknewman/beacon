@@ -62,11 +62,33 @@ Precedence is failure, unsupported, requesting, checking, permission, then adapt
 Implemented in `bluetoothReadiness.ts`; guidance text and the single next action per state
 live in `readinessPresentation.ts`.
 
-## Scan state (`ScanState`) — M2
+## Scan state (`ScanStatus`) — M2
 
 ```text
-idle | starting | scanning | stopping | failed
+idle|failed ──start_requested──► starting ──start_succeeded──► scanning
+starting|scanning ──stop_requested──► stopping ──stop_succeeded──► idle
+starting ──start_failed──► failed
+stopping ──stop_failed──► failed
+starting|scanning|stopping ──native_failed──► failed
 ```
+
+`phase` uses the shared `ScanState` vocabulary (`idle | starting | scanning | stopping | failed`).
+Every other (phase, action) pair is a no-op, which is what makes the coordinator safe against
+late promise results: a stop requested while the start call is in flight moves to `stopping`,
+the late `start_succeeded` is ignored, and the coordinator waits for the start promise before
+calling `stopScan`. Implemented in `features/scan/scanReducer.ts`; driven by
+`useScanCoordinator`, which also owns the device cache (ADR 0004).
+
+Gate: the coordinator starts a scan only while readiness is `ready` and stops it when readiness
+leaves that state (radio off, permission revoked). Discovery events are accepted only in
+`starting` or `scanning`.
+
+### Error routing
+
+`ble.error` events without a `deviceId` are adapter or bridge failures and move the adapter
+machine to `failed`, with one exception: code `scan_failed` belongs to the scan machine
+(`native_failed`). Device-scoped errors (`deviceId` present) are handled by the connection
+coordinator from M3.
 
 ## Connection state (`ConnectionState`) — M3
 
