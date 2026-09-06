@@ -33,7 +33,8 @@ tests).
 - Native tests cover the parts that can run without hardware: state and error mapping and the
   wire value contract. Anything touching a real radio is validated manually and reported as such.
 - Contract parity: the Swift and Kotlin tests assert that their wire values equal the TypeScript
-  unions verbatim, so a renamed code fails on every platform.
+  unions verbatim, so a renamed code fails on every platform (adapter state, permission state,
+  error codes, connection state, characteristic properties).
 
 ## Mock BLE layer
 

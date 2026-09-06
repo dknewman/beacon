@@ -114,6 +114,21 @@ Wire vocabulary (`ConnectionState`): `disconnected | connecting | connected |
 discovering_services | ready | disconnecting | failed`; mirrored by `BleConnectionState` in
 Swift and Kotlin with parity tests.
 
+## GATT table (`GattStatus`) — M4
+
+```text
+idle ──discovery_requested──► discovering ──discovery_succeeded──► ready(services)
+discovering ──discovery_failed──► failed
+any ──link_ended──► idle
+```
+
+Native discovers the whole table (services, then every service's characteristics) while
+connecting, so `discoverServices` returns a cached copy for a `ready` link and rejects with
+`disconnected` otherwise. `GattProvider` keeps one copy per device above navigation, fetches it
+as soon as the connection is `ready`, and drops it (`link_ended`) whenever the connection
+coordinator reports the device left `ready`, so a stale table never outlives its link.
+Implemented in `features/gatt/gattReducer.ts`.
+
 ## Events
 
 `NativeBleEvent` is a discriminated union on `type`:

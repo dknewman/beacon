@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import com.beacon.bluetooth.errors.BleError
 import com.beacon.bluetooth.errors.BleErrorCode
+import com.beacon.bluetooth.mapping.DiscoveredService
 import com.beacon.bluetooth.permissions.RequiredPermissions
 
 /**
@@ -58,6 +59,16 @@ class ConnectionRegistry(
             return
         }
         connection.readRssi(onResult)
+    }
+
+    @Synchronized
+    fun discoverServices(deviceId: String, onResult: (Result<List<DiscoveredService>>) -> Unit) {
+        val connection = connections[deviceId]
+        if (connection == null) {
+            onResult(Result.failure(BleError(BleErrorCode.DISCONNECTED, "Not connected to $deviceId")))
+            return
+        }
+        connection.discoverServices(onResult)
     }
 
     /** Ends every connection; the platform has already dropped them when the radio goes away. */

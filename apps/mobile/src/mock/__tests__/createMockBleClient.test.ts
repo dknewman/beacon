@@ -96,6 +96,27 @@ describe('createMockBleClient connections', () => {
     await expect(rssi).resolves.toBeLessThan(0);
   });
 
+  it('returns the scripted GATT table only while ready', async () => {
+    const { client, advance } = createClient({ connectStepMs: 100 });
+    const before = client.discoverServices(HRM);
+    await advance(10);
+    await expect(before).rejects.toMatchObject({ code: 'disconnected' });
+
+    const connectCall = client.connect(HRM);
+    await advance(320);
+    await connectCall;
+    const table = client.discoverServices(HRM);
+    await advance(10);
+    const services = await table;
+    expect(services.map(service => service.uuid)).toContain(HEART_RATE_SERVICE);
+    for (const service of services) {
+      expect(parseNativeBleEvent).toBeDefined();
+      for (const characteristic of service.characteristics) {
+        expect(characteristic.serviceUuid).toBe(service.uuid);
+      }
+    }
+  });
+
   it('rejects unknown devices and RSSI reads without a link', async () => {
     const { client, advance } = createClient();
     const unknown = client.connect('nope');

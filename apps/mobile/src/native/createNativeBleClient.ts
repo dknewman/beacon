@@ -2,6 +2,7 @@ import {
   toBleError,
   type BlePermissionState,
   type BluetoothState,
+  type GattService,
   type NativeBleEvent,
   type ScanOptions,
   type Unsubscribe,
@@ -9,6 +10,7 @@ import {
 import {
   parseBlePermissionState,
   parseBluetoothState,
+  parseGattServices,
   parseNativeBleEvent,
   parseRssi,
   type ValidationResult,
@@ -62,6 +64,10 @@ export function createNativeBleClient(spec: Spec): BleClient {
 
     readRssi(deviceId: string): Promise<number> {
       return callValidated(() => spec.readRssi(deviceId), parseRssi);
+    },
+
+    discoverServices(deviceId: string): Promise<GattService[]> {
+      return callValidated(() => spec.discoverServices(deviceId), parseGattServices);
     },
 
     subscribe(listener: (event: NativeBleEvent) => void): Unsubscribe {

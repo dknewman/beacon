@@ -9,6 +9,7 @@ import com.beacon.bluetooth.errors.toBleError
 import com.beacon.bluetooth.mapping.BleAdapterState
 import com.beacon.bluetooth.mapping.BleConnectionState
 import com.beacon.bluetooth.mapping.DiscoveredDevice
+import com.beacon.bluetooth.mapping.DiscoveredService
 import com.beacon.bluetooth.permissions.PermissionController
 import com.beacon.bluetooth.scanning.BleScanner
 import com.beacon.bluetooth.spec.NativeBeaconBluetoothSpec
@@ -16,6 +17,7 @@ import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReadableArray
+import com.facebook.react.bridge.WritableArray
 import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.PermissionAwareActivity
 
@@ -109,6 +111,15 @@ class BeaconBluetoothModule(reactContext: ReactApplicationContext) :
         }
     }
 
+    override fun discoverServices(deviceId: String, promise: Promise) {
+        connections.discoverServices(deviceId) { result ->
+            result.fold(
+                onSuccess = { promise.resolve(it.toWritableArray()) },
+                onFailure = { promise.rejectWith(it.toBleError(fallback = BleErrorCode.SERVICE_NOT_FOUND)) },
+            )
+        }
+    }
+
     override fun onAdapterStateChanged(state: BleAdapterState) {
         // The emitter callback is bound by the TurboModule infrastructure once JavaScript
         // has resolved this module. Broadcasts before that have no subscriber to reach;
@@ -155,6 +166,38 @@ class BeaconBluetoothModule(reactContext: ReactApplicationContext) :
         emitOnBleError(payload)
     }
 }
+
+/** Bridge form of the GATT table; matches `GattServicePayload[]` in the codegen spec. */
+private fun List<DiscoveredService>.toWritableArray(): WritableArray =
+    Arguments.createArray().apply {
+        for (service in this@toWritableArray) {
+            pushMap(
+                Arguments.createMap().apply {
+                    putString("uuid", service.uuid)
+                    putBoolean("primary", service.primary)
+                    putArray(
+                        "characteristics",
+                        Arguments.createArray().apply {
+                            for (characteristic in service.characteristics) {
+                                pushMap(
+                                    Arguments.createMap().apply {
+                                        putString("serviceUuid", characteristic.serviceUuid)
+                                        putString("uuid", characteristic.uuid)
+                                        putArray(
+                                            "properties",
+                                            Arguments.createArray().apply {
+                                                characteristic.properties.forEach { pushString(it.wireValue) }
+                                            },
+                                        )
+                                    },
+                                )
+                            }
+                        },
+                    )
+                },
+            )
+        }
+    }
 
 /** Bridge form of [BleError]; matches `BleErrorPayload` in the codegen spec. */
 private fun BleError.toWritableMap(): WritableMap =

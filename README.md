@@ -10,7 +10,7 @@ through a narrow, codegen-typed Turbo Module whose every payload is validated at
 it reaches application state.
 
 > Status: **M0 (Foundation)**, **M1 (Bluetooth state and permissions)**, **M2 (Device
-> scanning)** and **M3 (Connection lifecycle)** are implemented. See
+> scanning)**, **M3 (Connection lifecycle)** and **M4 (GATT discovery)** are implemented. See
 > [Milestone status](#milestone-status) for exactly what has and has not been validated, on
 > which hardware.
 
@@ -81,6 +81,10 @@ disconnecting | failed`) mirrored from native events. `connect()` resolves at `r
   JavaScript owns the 15 s timeout and cancels natively on expiry, and errors always precede
   the `disconnected` they cause so the reason survives. See
   [ADR 0005](docs/ADR/0005-navigation-and-connection-promise-semantics.md).
+- GATT discovery (`GattDiscoveryApi`) returns the table native discovered while connecting.
+  Every UUID is normalized and every property checked against the contract before the table
+  reaches the GATT inspector, which labels services and characteristics from the known UUID
+  registry (`@beacon/ble-contracts`, PROJECT.md 34).
 
 ## iOS CoreBluetooth
 
@@ -99,11 +103,12 @@ disconnecting | failed`) mirrored from native events. `connect()` resolves at `r
   proxy, and holds the completions waiting on it. `BluetoothManager` connects, discovers
   services after `didConnect`, completes at `ready`, and reports failures and remote
   disconnects as errors before the `disconnected` transition. Peripherals seen by the scanner
-  are retained so they can be connected later.
+  are retained so they can be connected later. A link reports `ready` only after every service's
+  characteristics have been discovered; the mapped table is cached on the session.
 - `Mapping/BluetoothStateMapper.swift`, `Mapping/AuthorizationMapper.swift`,
   `Mapping/AdvertisementMapper.swift` (advertisement dictionary → `BleDevice` shape, hex and
-  ISO-8601 encoding), `Mapping/ConnectionStateMapper.swift` and `Errors/BleError.swift` are
-  pure and covered by XCTest.
+  ISO-8601 encoding), `Mapping/ConnectionStateMapper.swift`, `Mapping/GattMapper.swift`
+  (property option set → wire values) and `Errors/BleError.swift` are pure and covered by XCTest.
 - `BeaconBluetoothModule.mm` is a thin Objective-C++ class conforming to the generated spec and
   forwarding to Swift. It contains no Bluetooth logic.
 
@@ -127,18 +132,27 @@ disconnecting | failed`) mirrored from native events. `connect()` resolves at `r
   checks. `mapping/GattStatusMapper.kt` turns status codes (133, 8, 19, 22, 62) into contract
   errors with the platform status preserved.
 - `mapping/BluetoothStateMapper.kt`, `mapping/ConnectionStateMapper.kt`,
-  `mapping/GattStatusMapper.kt`, `mapping/ScanResultMapper.kt` (manufacturer data re-serialized
+  `mapping/GattStatusMapper.kt`, `mapping/GattTreeMapper.kt` (property bitmask → wire values,
+  tree snapshot), `mapping/ScanResultMapper.kt` (manufacturer data re-serialized
   with the little-endian company id so it matches iOS), `mapping/BleUuid.kt`,
   `mapping/ScanFailureMapper.kt`, `mapping/IsoTimestamp.kt`, `permissions/PermissionStateMapper.kt`,
   `permissions/RequiredPermissions.kt` and `errors/BleError.kt` are pure and covered by JUnit.
 - `BeaconBluetoothModule.kt` extends the generated `NativeBeaconBluetoothSpec`, starts and stops
   the controller, scanner and connections with the module lifecycle, and emits typed events.
 
-## GATT Inspector, Protocol Parsers, Session Recording
+## GATT Inspector
 
-Not yet implemented. They are scheduled as milestones M4, M7 and M8 in PROJECT.md. The shared
-domain models (`GattService`, `BlePacket`, `BleSession`) already exist in `@beacon/ble-contracts`
-so the native, validation and UI layers grow against one vocabulary.
+`apps/mobile/src/features/gatt/`: `GattProvider` keeps one discovered table per connected device
+and drops it with the link; `GattInspectorScreen` lists services and characteristics with names
+from the known UUID registry and the characteristic properties; `CharacteristicDetailScreen`
+shows identity and properties, and states plainly that reads, writes and subscriptions arrive
+with M5 and M6 rather than showing dead controls.
+
+## Protocol Parsers, Session Recording
+
+Not yet implemented. They are scheduled as milestones M7 and M8 in PROJECT.md. The shared domain
+models (`BlePacket`, `BleSession`) already exist in `@beacon/ble-contracts` so the native,
+validation and UI layers grow against one vocabulary.
 
 ## Testing
 
@@ -231,11 +245,12 @@ beacon/
 │       ├── features/bluetooth/  adapter + permission machines, readiness panel
 │       ├── features/scan/       scan coordinator, device cache, filters, device list screen
 │       ├── features/connection/ connection coordinator, per-device machine, device detail screen
+│       ├── features/gatt/       GATT table provider, inspector and characteristic screens
 │       ├── mock/                scripted mock BLE client (runtime option)
 │       ├── native/              Turbo Module spec + validated client wrapper
 │       └── theme/
 ├── packages/
-│   ├── ble-contracts/           domain models, state unions, errors, bridge contract, UUIDs
+│   ├── ble-contracts/           domain models, state unions, errors, bridge contract, UUIDs, known UUID registry
 │   └── validation/              zod schemas + parse helpers for the native boundary
 ├── docs/                        architecture, state model, bridge, permissions, testing, ADRs
 ├── scripts/ios/                 Xcode project sync (xcodeproj gem)

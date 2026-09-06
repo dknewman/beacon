@@ -55,6 +55,7 @@ BluetoothManager.swift                     — owns CBCentralManager; adapter st
 PeripheralSession.swift                    — one CBPeripheral + private CBPeripheralDelegate proxy, pending completions
 Mapping/BluetoothStateMapper.swift         — CBManagerState → wire value
 Mapping/ConnectionStateMapper.swift        — BleConnectionState wire vocabulary, CBPeripheralState mapping
+Mapping/GattMapper.swift                   — CBService/CBCharacteristic → GattService payloads, property option set → wire values
 Mapping/AuthorizationMapper.swift          — CBManagerAuthorization → wire value
 Mapping/AdvertisementMapper.swift          — discovery callback → BleDevice payload, UUID parsing
 Errors/BleError.swift                      — CoreBluetooth errors → contract codes
@@ -73,7 +74,9 @@ JavaScript's `toBleError` reads the contract code.
 
 Connections: `connect` retains the `CBPeripheral` (from the scan cache or
 `retrievePeripherals(withIdentifiers:)`), calls `connect`, then `discoverServices(nil)` after
-`didConnect`, and completes at `ready`. `didFailToConnect` / `didDisconnectPeripheral` emit the
+`didConnect`, discovers each service's characteristics, and completes at `ready` once the last
+`didDiscoverCharacteristicsFor` arrives. The mapped table is cached on the session and served by
+`discoverServices`; a discovery error closes the link after emitting the error. `didFailToConnect` / `didDisconnectPeripheral` emit the
 error (with `deviceId`) before the `disconnected` transition unless JavaScript asked for the
 disconnect. Cancelling a pending attempt is settled locally because CoreBluetooth does not
 promise a callback for it.
@@ -88,7 +91,7 @@ scanning/BleScanner.kt     — BluetoothLeScanner, pre-flight checks, throttling
 connection/ConnectionRegistry.kt — one DeviceConnection per address, shared pre-flight checks
 connection/DeviceConnection.kt   — BluetoothGatt + BluetoothGattCallback, state machine, pending promises
 permissions/*              — runtime permission flow (see PERMISSIONS.md)
-mapping/BluetoothStateMapper.kt, ConnectionStateMapper.kt, GattStatusMapper.kt, ScanResultMapper.kt, BleUuid.kt, ScanFailureMapper.kt, IsoTimestamp.kt
+mapping/BluetoothStateMapper.kt, ConnectionStateMapper.kt, GattStatusMapper.kt, GattTreeMapper.kt, ScanResultMapper.kt, BleUuid.kt, ScanFailureMapper.kt, IsoTimestamp.kt
 errors/BleError.kt         — contract codes, Promise.rejectWith, Throwable.toBleError
 ```
 
@@ -96,7 +99,9 @@ errors/BleError.kt         — contract codes, Promise.rejectWith, Throwable.toB
 connection (`BluetoothGatt.close()`), so nothing leaks across React instance reloads.
 `DeviceConnection` guards its state with the instance lock because `BluetoothGattCallback`
 runs on a binder thread; `GattStatusMapper` turns status codes (133, 8, 19, 22, 62) into
-contract errors with the platform status kept in `nativeCode`. Events are emitted only once the
+contract errors with the platform status kept in `nativeCode`. Android delivers the complete
+tree in `onServicesDiscovered`; `GattTreeMapper` snapshots it (property bitmask → wire values,
+uppercase UUIDs) and `discoverServices` serves the snapshot while the link is READY. Events are emitted only once the
 TurboModule infrastructure has bound the emitter callback. When the adapter leaves `STATE_ON`
 the module forgets the scan (the platform has already dropped it) so the next `startScan` is a
 real start.
@@ -113,6 +118,8 @@ real start.
   `stopScan()` never throws for "not scanning".
 - `connect` rejections default to `connection_failed`; `readRssi` results are range-checked
   (`parseRssi`), so a bogus 127 from a platform becomes `invalid_payload`.
+- `discoverServices` results are validated with `parseGattServices`: every UUID is normalized
+  to canonical form and every property must be a `CharacteristicProperty`.
 - `subscribe()` folds the four typed emitters into the `NativeBleEvent` union, validates each
   payload (`scan.device_discovered` also normalizes UUIDs), and returns one unsubscribe function
   that removes every native subscription.

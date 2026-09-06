@@ -3,6 +3,7 @@ import {
   type BlePermissionState,
   type BluetoothState,
   type ConnectionState,
+  type GattService,
   type NativeBleEvent,
   type ScanOptions,
   type Unsubscribe,
@@ -356,6 +357,24 @@ export function createMockBleClient(options: MockBleClientOptions = {}): MockBle
           });
         }
         return driftRssi(peripheral);
+      }),
+
+    discoverServices: (deviceId: string) =>
+      later((): GattService[] => {
+        const link = links.get(deviceId);
+        const peripheral = peripherals.find(candidate => candidate.id === deviceId);
+        if (link === undefined || link.state !== 'ready' || peripheral === undefined) {
+          throw new BleError({
+            code: 'disconnected',
+            message: `Not connected to ${deviceId}`,
+          });
+        }
+        return peripheral.services.map(item => ({
+          ...item,
+          characteristics: item.characteristics.map(characteristic => ({
+            ...characteristic,
+          })),
+        }));
       }),
 
     subscribe(listener: (event: NativeBleEvent) => void): Unsubscribe {
