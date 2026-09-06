@@ -12,9 +12,9 @@ PROJECT.md prefers a monorepo with the app under `apps/mobile` and shared packag
 - yarn 1 workspaces (`apps/*`, `packages/*`), dependencies hoisted to the repository root.
 - Shared packages are consumed as TypeScript source (`main: src/index.ts`); no build step.
 - Metro watches the repository root and resolves from both the app and root `node_modules`.
-- Gradle locates `react-native`, `@react-native/codegen` and the RN Gradle plugin via
-  `node --print "require.resolve(...)"` so no path assumes a hoisting layout. The Podfile already
-  does the same for `react_native_pods.rb`.
+- Gradle locates `react-native`, `@react-native/codegen`, `hermes-compiler` and the RN Gradle
+  plugin via `node --print "require.resolve(...)"` so no path assumes a hoisting layout. The
+  Podfile already does the same for `react_native_pods.rb`.
 - Tooling is configured once at the root: `tsconfig.json`, `eslint.config.js` (flat, ESLint 9),
   `babel.config.js`, `.prettierrc.js`, and a Jest `projects` list.
 
