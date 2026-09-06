@@ -1,4 +1,10 @@
-import { BleError, isBleError, isBleErrorCode, toBleError } from '../errors';
+import {
+  BleError,
+  isBleError,
+  isBleErrorCode,
+  isBleErrorInfo,
+  toBleError,
+} from '../errors';
 
 describe('BleError', () => {
   it('carries the shared error code and native diagnostics', () => {
@@ -62,5 +68,25 @@ describe('isBleErrorCode', () => {
     expect(isBleErrorCode('scan_failed')).toBe(true);
     expect(isBleErrorCode('SCAN_FAILED')).toBe(false);
     expect(isBleErrorCode(42)).toBe(false);
+  });
+
+  it('wraps plain BleErrorInfo objects from native events without losing fields', () => {
+    const error = toBleError({
+      code: 'disconnected',
+      message: 'The peripheral closed the connection',
+      nativeCode: '19',
+    });
+    expect(error).toBeInstanceOf(BleError);
+    expect(error.code).toBe('disconnected');
+    expect(error.message).toBe('The peripheral closed the connection');
+    expect(error.nativeCode).toBe('19');
+    expect(error.nativeDomain).toBeUndefined();
+  });
+
+  it('does not mistake arbitrary objects for BleErrorInfo', () => {
+    expect(isBleErrorInfo({ code: 'nope', message: 'x' })).toBe(false);
+    expect(isBleErrorInfo({ code: 'unknown' })).toBe(false);
+    expect(isBleErrorInfo(null)).toBe(false);
+    expect(toBleError({ code: 'nope', message: 'x' }).code).toBe('unknown');
   });
 });

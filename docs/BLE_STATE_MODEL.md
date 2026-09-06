@@ -87,19 +87,32 @@ leaves that state (radio off, permission revoked). Discovery events are accepted
 
 `ble.error` events without a `deviceId` are adapter or bridge failures and move the adapter
 machine to `failed`, with one exception: code `scan_failed` belongs to the scan machine
-(`native_failed`). Device-scoped errors (`deviceId` present) are handled by the connection
-coordinator from M3.
+(`native_failed`). Device-scoped errors (`deviceId` present) belong to the connection coordinator: they move that
+device to `failed`, and native always sends them before the `disconnected` they cause.
 
-## Connection state (`ConnectionState`) — M3
+## Connection state (`DeviceConnection`) — M3
 
 ```text
-disconnected → connecting → connected → discovering_services → ready
-any → failed → disconnected
-ready/connected → disconnecting → disconnected
+disconnected|failed ──connect_requested──► connecting
+connecting ──native connected──► connected ──native discovering_services──► discovering_services ──native ready──► ready
+connecting|connected|discovering_services|ready ──disconnect_requested──► disconnecting ──native disconnected──► disconnected
+any ──native error (deviceId) / request_failed / timeout──► failed ──native disconnected──► disconnected (lastError kept)
 ```
 
-Native code drives transitions and emits `connection.state_changed`; JavaScript mirrors them
-after validation. The transition table and its tests arrive with the connection coordinator.
+Native is authoritative: every `connection.state_changed` event is applied as-is
+(`features/connection/connectionReducer.ts`). JavaScript adds only the optimistic `connecting`
+when the user taps Connect, the `failed` state from a rejected call or the 15 s timeout, and
+`lastError`, which survives `failed → disconnected` so the detail screen can say why the link
+ended. A clean, user-initiated disconnect leaves no `lastError`.
+
+The coordinator (`ConnectionProvider`) lives above navigation, allows one attempt per device,
+cancels a timed-out attempt through `disconnect`, and ignores the rejection of an attempt it
+ended itself. Adapter loss ends every link natively (error `bluetooth_powered_off`, then
+`disconnected`).
+
+Wire vocabulary (`ConnectionState`): `disconnected | connecting | connected |
+discovering_services | ready | disconnecting | failed`; mirrored by `BleConnectionState` in
+Swift and Kotlin with parity tests.
 
 ## Events
 

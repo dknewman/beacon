@@ -45,8 +45,8 @@ describe('App (adapter + permission readiness)', () => {
     await render(<App bleClient={client} />);
 
     expect(readiness()).toHaveTextContent('Checking');
-    // One subscription for the adapter hook, one for the scan coordinator.
-    expect(client.listenerCount).toBe(2);
+    // Adapter hook, scan coordinator and connection coordinator each subscribe once.
+    expect(client.listenerCount).toBe(3);
     expect(client.getBluetoothStateCalls).toBe(1);
     expect(client.getPermissionStateCalls).toBe(1);
 
@@ -224,7 +224,7 @@ describe('App (adapter + permission readiness)', () => {
   it('removes native subscriptions on unmount', async () => {
     const client = new FakeBleClient();
     const view = await render(<App bleClient={client} />);
-    expect(client.listenerCount).toBe(2);
+    expect(client.listenerCount).toBe(3);
     await view.unmount();
     expect(client.listenerCount).toBe(0);
     // Late native responses after unmount must not throw or update state.
@@ -505,5 +505,280 @@ describe('App (device scanning)', () => {
     await view.unmount();
     expect(client.stopScanCalls).toBe(1);
     expect(client.listenerCount).toBe(0);
+  });
+});
+
+const connectionStatus = () => screen.getByTestId('connection-status-value');
+const connectionAction = () => screen.getByTestId('connection-action');
+
+/** Scans, discovers one device, and opens its detail screen. */
+async function openDetail(id = 'scale', overrides: Partial<BleDevice> = {}) {
+  const client = await renderScanning();
+  await act(async () => {
+    client.emit(advertisement(id, { name: 'QN Scale', rssi: -47, ...overrides }));
+  });
+  await fireEvent.press(screen.getByTestId(`device-${id}`));
+  expect(screen.getByTestId('detail-title')).toHaveTextContent('QN Scale');
+  return client;
+}
+
+describe('App (device detail and connection lifecycle)', () => {
+  it('opens a device from the list and shows its advertisement data', async () => {
+    const client = await openDetail('scale', {
+      serviceUuids: ['0000181D-0000-1000-8000-00805F9B34FB'],
+      manufacturerData: 'FFFF0A1B',
+    });
+    expect(screen.getByTestId('detail-id')).toHaveTextContent('scale');
+    expect(connectionStatus()).toHaveTextContent('Disconnected');
+    expect(screen.getByTestId('signal-value')).toHaveTextContent('-47 dBm');
+    expect(screen.getByTestId('advertisement-value')).toHaveTextContent('Connectable');
+    expect(screen.getByTestId('advertisement')).toHaveTextContent(/Services: 181D/);
+    expect(screen.getByTestId('advertisement')).toHaveTextContent(
+      /Manufacturer: FFFF0A1B/,
+    );
+    expect(connectionAction()).toHaveTextContent('Connect');
+    expect(client.connectCalls).toEqual([]);
+
+    // The scan keeps running underneath and the detail keeps following the cache.
+    await act(async () => {
+      client.emit(advertisement('scale', { rssi: -52 }));
+    });
+    expect(screen.getByTestId('signal-value')).toHaveTextContent('-52 dBm');
+  });
+
+  it('connects through every native transition and reads live RSSI when ready', async () => {
+    jest.useFakeTimers();
+    try {
+      const client = await openDetail();
+      await fireEvent.press(connectionAction());
+      expect(client.connectCalls).toEqual(['scale']);
+      expect(connectionStatus()).toHaveTextContent('Connecting');
+      expect(connectionAction()).toHaveTextContent('Cancel');
+
+      await act(async () => {
+        client.emit({
+          type: 'connection.state_changed',
+          deviceId: 'scale',
+          state: 'connecting',
+        });
+        client.emit({
+          type: 'connection.state_changed',
+          deviceId: 'scale',
+          state: 'connected',
+        });
+      });
+      expect(connectionStatus()).toHaveTextContent('Connected');
+      expect(connectionAction()).toHaveTextContent('Disconnect');
+
+      await act(async () => {
+        client.emit({
+          type: 'connection.state_changed',
+          deviceId: 'scale',
+          state: 'discovering_services',
+        });
+        client.emit({
+          type: 'connection.state_changed',
+          deviceId: 'scale',
+          state: 'ready',
+        });
+        client.resolveConnect();
+      });
+      expect(connectionStatus()).toHaveTextContent('Ready');
+      expect(client.readRssiCalls).toEqual(['scale']);
+      await act(async () => {
+        client.resolveRssi(-58);
+      });
+      expect(screen.getByTestId('signal-value')).toHaveTextContent('-58 dBm');
+      expect(screen.getByTestId('signal')).toHaveTextContent(/live from the link/);
+
+      await act(async () => {
+        jest.advanceTimersByTime(3_000);
+      });
+      expect(client.readRssiCalls).toEqual(['scale', 'scale']);
+
+      await fireEvent.press(connectionAction());
+      expect(client.disconnectCalls).toEqual(['scale']);
+      expect(connectionStatus()).toHaveTextContent('Disconnecting');
+      expect(connectionAction()).toBeDisabled();
+      await act(async () => {
+        client.emit({
+          type: 'connection.state_changed',
+          deviceId: 'scale',
+          state: 'disconnected',
+        });
+        client.resolveDisconnect();
+      });
+      expect(connectionStatus()).toHaveTextContent('Disconnected');
+      expect(screen.getByTestId('connection-status')).toHaveTextContent(
+        /Not connected to this device/,
+      );
+      // Polling stops with the link; the advertisement RSSI is shown again.
+      expect(screen.getByTestId('signal-value')).toHaveTextContent('-47 dBm');
+      await act(async () => {
+        jest.advanceTimersByTime(6_000);
+      });
+      expect(client.readRssiCalls).toHaveLength(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('cancels an attempt in progress', async () => {
+    const client = await openDetail();
+    await fireEvent.press(connectionAction());
+    await fireEvent.press(connectionAction());
+    expect(client.disconnectCalls).toEqual(['scale']);
+    expect(connectionStatus()).toHaveTextContent('Disconnecting');
+    await act(async () => {
+      client.emit({
+        type: 'connection.state_changed',
+        deviceId: 'scale',
+        state: 'disconnected',
+      });
+      client.rejectConnect(
+        Object.assign(new Error('Connection cancelled'), { code: 'disconnected' }),
+      );
+      client.resolveDisconnect();
+    });
+    expect(connectionStatus()).toHaveTextContent('Disconnected');
+    expect(screen.getByTestId('connection-status')).toHaveTextContent(
+      /Not connected to this device/,
+    );
+  });
+
+  it('times out a stalled attempt, cancels it natively and offers a retry', async () => {
+    jest.useFakeTimers();
+    try {
+      const client = await openDetail();
+      await fireEvent.press(connectionAction());
+      await act(async () => {
+        client.emit({
+          type: 'connection.state_changed',
+          deviceId: 'scale',
+          state: 'connecting',
+        });
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(15_000);
+      });
+      expect(connectionStatus()).toHaveTextContent('Failed');
+      expect(screen.getByTestId('connection-status')).toHaveTextContent(
+        /No connection after 15 s \(connection_timeout\)/,
+      );
+      expect(client.disconnectCalls).toEqual(['scale']);
+      expect(connectionAction()).toHaveTextContent('Try again');
+
+      await act(async () => {
+        client.emit({
+          type: 'connection.state_changed',
+          deviceId: 'scale',
+          state: 'disconnected',
+        });
+        client.rejectConnect(
+          Object.assign(new Error('cancelled'), { code: 'disconnected' }),
+        );
+        client.resolveDisconnect();
+      });
+      expect(connectionStatus()).toHaveTextContent('Disconnected');
+      expect(screen.getByTestId('connection-status')).toHaveTextContent(
+        /connection_timeout/,
+      );
+
+      await fireEvent.press(connectionAction());
+      expect(client.connectCalls).toEqual(['scale', 'scale']);
+      expect(connectionStatus()).toHaveTextContent('Connecting');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('reports a native connection failure with its code', async () => {
+    const client = await openDetail();
+    await fireEvent.press(connectionAction());
+    await act(async () => {
+      client.emit({
+        type: 'ble.error',
+        deviceId: 'scale',
+        error: {
+          code: 'connection_failed',
+          message: 'GATT error 133',
+          nativeCode: '133',
+        },
+      });
+      client.emit({
+        type: 'connection.state_changed',
+        deviceId: 'scale',
+        state: 'disconnected',
+      });
+      client.rejectConnect(
+        Object.assign(new Error('GATT error 133'), { code: 'connection_failed' }),
+      );
+    });
+    expect(connectionStatus()).toHaveTextContent('Disconnected');
+    expect(screen.getByTestId('connection-status')).toHaveTextContent(
+      /GATT error 133 \(connection_failed\)/,
+    );
+    expect(connectionAction()).toHaveTextContent('Connect');
+    expect(connectionAction()).toBeEnabled();
+    expect(screen.queryByTestId('detail-hint')).toBeNull();
+  });
+
+  it('shows a remote disconnect and keeps the reason', async () => {
+    const client = await openDetail();
+    await fireEvent.press(connectionAction());
+    await act(async () => {
+      client.emitConnected('scale');
+      client.resolveConnect();
+    });
+    expect(connectionStatus()).toHaveTextContent('Ready');
+
+    await act(async () => {
+      client.emit({
+        type: 'ble.error',
+        deviceId: 'scale',
+        error: { code: 'disconnected', message: 'The peripheral closed the connection' },
+      });
+    });
+    expect(connectionStatus()).toHaveTextContent('Failed');
+    await act(async () => {
+      client.emit({
+        type: 'connection.state_changed',
+        deviceId: 'scale',
+        state: 'disconnected',
+      });
+    });
+    expect(connectionStatus()).toHaveTextContent('Disconnected');
+    expect(screen.getByTestId('connection-status')).toHaveTextContent(
+      /peripheral closed the connection \(disconnected\)/,
+    );
+  });
+
+  it('disables connecting while Bluetooth is not ready and survives navigating back', async () => {
+    const client = await openDetail();
+    await act(async () => {
+      client.emit({ type: 'bluetooth.state_changed', state: 'powered_off' });
+    });
+    expect(connectionAction()).toBeDisabled();
+    expect(screen.getByTestId('detail-hint')).toHaveTextContent(/Turn on Bluetooth/);
+
+    await act(async () => {
+      client.resolveStopScan();
+    });
+    await fireEvent.press(screen.getByTestId('detail-back'));
+    expect(screen.queryByTestId('device-detail')).toBeNull();
+    expect(readiness()).toHaveTextContent('Bluetooth is off');
+    // The device list keeps the last scan's rows and the radio guidance.
+    expect(screen.getByTestId('device-scale')).toBeOnTheScreen();
+  });
+
+  it('shows the connection badge on the list row', async () => {
+    const client = await openDetail();
+    await fireEvent.press(connectionAction());
+    await act(async () => {
+      client.emitConnected('scale');
+      client.resolveConnect();
+    });
+    await fireEvent.press(screen.getByTestId('detail-back'));
+    expect(screen.getByTestId('device-scale-seen')).toHaveTextContent(/Connected/);
   });
 });

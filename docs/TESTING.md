@@ -2,14 +2,14 @@
 
 ## Layers and tools
 
-| Layer                                        | Tool                                   | Location                               |
-| -------------------------------------------- | -------------------------------------- | -------------------------------------- |
-| Shared TypeScript packages                   | Jest (node environment)                | `packages/*/src/__tests__`             |
-| App logic (reducers, labels, bridge wrapper) | Jest + `@react-native/jest-preset`     | `apps/mobile/src/**/__tests__`         |
-| Component / integration                      | React Native Testing Library 14        | `apps/mobile/tests`                    |
-| Swift                                        | XCTest (`BeaconBluetoothTests` target) | `apps/mobile/ios/BeaconBluetoothTests` |
-| Kotlin                                       | JUnit 4 (`testDebugUnitTest`)          | `apps/mobile/android/app/src/test`     |
-| End to end                                   | Maestro or Detox (planned, M11+)       |                                        |
+| Layer                                        | Tool                                                         | Location                               |
+| -------------------------------------------- | ------------------------------------------------------------ | -------------------------------------- |
+| Shared TypeScript packages                   | Jest (node environment)                                      | `packages/*/src/__tests__`             |
+| App logic (reducers, labels, bridge wrapper) | Jest + `@react-native/jest-preset`                           | `apps/mobile/src/**/__tests__`         |
+| Component / integration                      | React Native Testing Library 14, real React Navigation stack | `apps/mobile/tests`                    |
+| Swift                                        | XCTest (`BeaconBluetoothTests` target)                       | `apps/mobile/ios/BeaconBluetoothTests` |
+| Kotlin                                       | JUnit 4 (`testDebugUnitTest`)                                | `apps/mobile/android/app/src/test`     |
+| End to end                                   | Maestro or Detox (planned, M11+)                             |                                        |
 
 Run everything JavaScript from the repo root: `yarn validate` (typecheck, lint, format check,
 tests).
@@ -26,6 +26,10 @@ tests).
   are asserted, not assumed.
 - The bridge wrapper is tested against a hand written fake of the codegen spec, so malformed
   native payloads are exercised without a device.
+- Integration tests drive the real navigator: they tap a row, assert on the detail screen, and
+  go back. `@react-navigation/*` and `react-native-screens` are ESM-only and are added to the
+  Jest transform allow-list in `apps/mobile/jest.config.js`. Timers (connect timeout, RSSI
+  polling, stale hiding) run under Jest fake timers.
 - Native tests cover the parts that can run without hardware: state and error mapping and the
   wire value contract. Anything touching a real radio is validated manually and reported as such.
 - Contract parity: the Swift and Kotlin tests assert that their wire values equal the TypeScript

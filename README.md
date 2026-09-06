@@ -9,9 +9,10 @@ Swift and CoreBluetooth on iOS, Kotlin and the Android Bluetooth LE APIs on Andr
 through a narrow, codegen-typed Turbo Module whose every payload is validated at runtime before
 it reaches application state.
 
-> Status: **M0 (Foundation)**, **M1 (Bluetooth state and permissions)** and **M2 (Device
-> scanning)** are implemented. See [Milestone status](#milestone-status) for exactly what has and
-> has not been validated, on which hardware.
+> Status: **M0 (Foundation)**, **M1 (Bluetooth state and permissions)**, **M2 (Device
+> scanning)** and **M3 (Connection lifecycle)** are implemented. See
+> [Milestone status](#milestone-status) for exactly what has and has not been validated, on
+> which hardware.
 
 ## What It Is
 
@@ -74,6 +75,12 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
   throttled advertisements; the cache deduplicates by id, smooths RSSI, hides devices not seen
   for 10 s, and the list filters by name, service UUID and signal strength in memory. See
   [ADR 0004](docs/ADR/0004-scan-duplicates-and-device-cache.md).
+- Connections (`ConnectionApi`) are driven by a connection coordinator with one explicit
+  per-device machine (`disconnected | connecting | connected | discovering_services | ready |
+disconnecting | failed`) mirrored from native events. `connect()` resolves at `ready`,
+  JavaScript owns the 15 s timeout and cancels natively on expiry, and errors always precede
+  the `disconnected` they cause so the reason survives. See
+  [ADR 0005](docs/ADR/0005-navigation-and-connection-promise-semantics.md).
 
 ## iOS CoreBluetooth
 
@@ -88,9 +95,15 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
   UUID filters are validated before `CBUUID` sees them, so a bad filter is a rejection, not a
   crash. CoreBluetooth drops the scan when the radio leaves `poweredOn`; the manager mirrors that
   and JavaScript stops the coordinator from the adapter event.
+- `PeripheralSession.swift` retains one `CBPeripheral`, is its delegate through a private
+  proxy, and holds the completions waiting on it. `BluetoothManager` connects, discovers
+  services after `didConnect`, completes at `ready`, and reports failures and remote
+  disconnects as errors before the `disconnected` transition. Peripherals seen by the scanner
+  are retained so they can be connected later.
 - `Mapping/BluetoothStateMapper.swift`, `Mapping/AuthorizationMapper.swift`,
   `Mapping/AdvertisementMapper.swift` (advertisement dictionary → `BleDevice` shape, hex and
-  ISO-8601 encoding) and `Errors/BleError.swift` are pure and covered by XCTest.
+  ISO-8601 encoding), `Mapping/ConnectionStateMapper.swift` and `Errors/BleError.swift` are
+  pure and covered by XCTest.
 - `BeaconBluetoothModule.mm` is a thin Objective-C++ class conforming to the generated spec and
   forwarding to Swift. It contains no Bluetooth logic.
 
@@ -107,12 +120,19 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
   filter UUIDs before starting (contract errors instead of platform exceptions), throttles
   discoveries per address, and turns `onScanFailed` into a `scan_failed` event with the platform
   code preserved, including the "5 scans per 30 seconds" throttle Android applies.
-- `mapping/BluetoothStateMapper.kt`, `mapping/ScanResultMapper.kt` (manufacturer data re-serialized
+- `connection/DeviceConnection.kt` owns one `BluetoothGatt` and its callback, drives the
+  connection machine under the instance lock (callbacks arrive on a binder thread), discovers
+  services after the link comes up, and closes the client on every exit path.
+  `connection/ConnectionRegistry.kt` keeps one connection per address behind shared pre-flight
+  checks. `mapping/GattStatusMapper.kt` turns status codes (133, 8, 19, 22, 62) into contract
+  errors with the platform status preserved.
+- `mapping/BluetoothStateMapper.kt`, `mapping/ConnectionStateMapper.kt`,
+  `mapping/GattStatusMapper.kt`, `mapping/ScanResultMapper.kt` (manufacturer data re-serialized
   with the little-endian company id so it matches iOS), `mapping/BleUuid.kt`,
   `mapping/ScanFailureMapper.kt`, `mapping/IsoTimestamp.kt`, `permissions/PermissionStateMapper.kt`,
   `permissions/RequiredPermissions.kt` and `errors/BleError.kt` are pure and covered by JUnit.
 - `BeaconBluetoothModule.kt` extends the generated `NativeBeaconBluetoothSpec`, starts and stops
-  the controller and scanner with the module lifecycle, and emits typed events.
+  the controller, scanner and connections with the module lifecycle, and emits typed events.
 
 ## GATT Inspector, Protocol Parsers, Session Recording
 
@@ -141,10 +161,11 @@ See [docs/TESTING.md](docs/TESTING.md) for the strategy and the mock layer plan.
 
 ## Mock BLE Environment
 
-`apps/mobile/src/mock/createMockBleClient.ts` implements the M2 client surface with scripted
+`apps/mobile/src/mock/createMockBleClient.ts` implements the M3 client surface with scripted
 peripherals (heart rate monitor, weight scale, blood pressure monitor, Nordic UART device and an
-unnamed beacon) that advertise on realistic intervals with drifting RSSI, and refuses to scan
-when the simulated radio is off or permission is missing. Set `USE_MOCK_BLE_CLIENT` to `true` in
+unnamed beacon) that advertise on realistic intervals with drifting RSSI, connect through every
+transition, answer RSSI reads, and can be scripted to refuse, stall or drop a connection. It
+refuses to scan or connect when the simulated radio is off or permission is missing. Set `USE_MOCK_BLE_CLIENT` to `true` in
 `apps/mobile/src/app/runtimeOptions.ts` to run the app against it on a simulator or without
 peripherals nearby. It grows into the full M10 environment (connections, GATT, failure
 scenarios) as those segments land. Tests use `FakeBleClient`, which keeps every native call
@@ -156,6 +177,7 @@ pending until the test settles it.
 | ---------- | ---------------------------------------------------------------------------------------------------------------- |
 | App        | React Native 0.87 (New Architecture), React 19, TypeScript 6                                                     |
 | Bridge     | Turbo Native Module with codegen, typed event emitters                                                           |
+| Navigation | React Navigation 7 native stack (react-native-screens)                                                           |
 | Validation | zod 4                                                                                                            |
 | iOS        | Swift 5, CoreBluetooth, minimum iOS 15.1                                                                         |
 | Android    | Kotlin 2.2, Android BLE APIs, minSdk 24, target 36                                                               |
@@ -199,10 +221,11 @@ yarn start
 beacon/
 ├── apps/mobile/                 React Native app (ios/, android/, src/)
 │   └── src/
-│       ├── app/                 composition root (App, bootstrap)
+│       ├── app/                 composition root (App, bootstrap), navigation stack
 │       ├── components/          presentational, accessible building blocks
 │       ├── features/bluetooth/  adapter + permission machines, readiness panel
 │       ├── features/scan/       scan coordinator, device cache, filters, device list screen
+│       ├── features/connection/ connection coordinator, per-device machine, device detail screen
 │       ├── mock/                scripted mock BLE client (runtime option)
 │       ├── native/              Turbo Module spec + validated client wrapper
 │       └── theme/
@@ -220,6 +243,7 @@ beacon/
 - [ADR 0002](docs/ADR/0002-native-bridge-contract.md): codegen Turbo Module with per-event typed emitters and runtime validation on the JS side.
 - [ADR 0003](docs/ADR/0003-monorepo-workspace-layout.md): yarn workspaces monorepo with node-resolved native build paths.
 - [ADR 0004](docs/ADR/0004-scan-duplicates-and-device-cache.md): request duplicate advertisements, throttle natively, deduplicate and smooth in the application-layer device cache.
+- [ADR 0005](docs/ADR/0005-navigation-and-connection-promise-semantics.md): React Navigation native stack above the coordinators; `connect()` resolves at `ready`; JavaScript owns the connection timeout.
 
 ## Milestone status
 
