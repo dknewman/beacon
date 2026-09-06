@@ -51,8 +51,10 @@ the Gradle build is the source of truth.
 
 ```text
 BeaconBluetoothModule.mm  (Objective-C++)  — conforms to the generated spec, forwards to Swift
-BluetoothManager.swift                     — owns CBCentralManager; adapter state, permission, scanning
+BluetoothManager.swift                     — owns CBCentralManager; adapter state, permission, scanning, connections
+PeripheralSession.swift                    — one CBPeripheral + private CBPeripheralDelegate proxy, pending completions
 Mapping/BluetoothStateMapper.swift         — CBManagerState → wire value
+Mapping/ConnectionStateMapper.swift        — BleConnectionState wire vocabulary, CBPeripheralState mapping
 Mapping/AuthorizationMapper.swift          — CBManagerAuthorization → wire value
 Mapping/AdvertisementMapper.swift          — discovery callback → BleDevice payload, UUID parsing
 Errors/BleError.swift                      — CoreBluetooth errors → contract codes
@@ -69,6 +71,13 @@ Void promises: Swift completes with `nil` on success or a `BleError.payload` dic
 shim's `settle:resolve:reject:` turns the dictionary into `reject(code, message, NSError)` so
 JavaScript's `toBleError` reads the contract code.
 
+Connections: `connect` retains the `CBPeripheral` (from the scan cache or
+`retrievePeripherals(withIdentifiers:)`), calls `connect`, then `discoverServices(nil)` after
+`didConnect`, and completes at `ready`. `didFailToConnect` / `didDisconnectPeripheral` emit the
+error (with `deviceId`) before the `disconnected` transition unless JavaScript asked for the
+disconnect. Cancelling a pending attempt is settled locally because CoreBluetooth does not
+promise a callback for it.
+
 ## Android
 
 ```text
@@ -76,13 +85,18 @@ BeaconBluetoothModule.kt   — extends generated NativeBeaconBluetoothSpec, modu
 BeaconBluetoothPackage.kt  — BaseReactPackage registration (isTurboModule = true)
 BluetoothController.kt     — BluetoothManager/BluetoothAdapter, ACTION_STATE_CHANGED receiver
 scanning/BleScanner.kt     — BluetoothLeScanner, pre-flight checks, throttling, onScanFailed
+connection/ConnectionRegistry.kt — one DeviceConnection per address, shared pre-flight checks
+connection/DeviceConnection.kt   — BluetoothGatt + BluetoothGattCallback, state machine, pending promises
 permissions/*              — runtime permission flow (see PERMISSIONS.md)
-mapping/BluetoothStateMapper.kt, ScanResultMapper.kt, BleUuid.kt, ScanFailureMapper.kt, IsoTimestamp.kt
+mapping/BluetoothStateMapper.kt, ConnectionStateMapper.kt, GattStatusMapper.kt, ScanResultMapper.kt, BleUuid.kt, ScanFailureMapper.kt, IsoTimestamp.kt
 errors/BleError.kt         — contract codes, Promise.rejectWith, Throwable.toBleError
 ```
 
-`initialize()` starts the broadcast receiver and `invalidate()` stops it and any scan, so no
-receiver or scan leaks across React instance reloads. Events are emitted only once the
+`initialize()` starts the broadcast receiver and `invalidate()` stops it, any scan and every
+connection (`BluetoothGatt.close()`), so nothing leaks across React instance reloads.
+`DeviceConnection` guards its state with the instance lock because `BluetoothGattCallback`
+runs on a binder thread; `GattStatusMapper` turns status codes (133, 8, 19, 22, 62) into
+contract errors with the platform status kept in `nativeCode`. Events are emitted only once the
 TurboModule infrastructure has bound the emitter callback. When the adapter leaves `STATE_ON`
 the module forgets the scan (the platform has already dropped it) so the next `startScan` is a
 real start.
@@ -97,7 +111,9 @@ real start.
   `toBleError` and default to `native_failure`.
 - `startScan(options)` fills explicit defaults (`[]`, `false`) before crossing the bridge;
   `stopScan()` never throws for "not scanning".
-- `subscribe()` folds the three typed emitters into the `NativeBleEvent` union, validates each
+- `connect` rejections default to `connection_failed`; `readRssi` results are range-checked
+  (`parseRssi`), so a bogus 127 from a platform becomes `invalid_payload`.
+- `subscribe()` folds the four typed emitters into the `NativeBleEvent` union, validates each
   payload (`scan.device_discovered` also normalizes UUIDs), and returns one unsubscribe function
   that removes every native subscription.
 

@@ -10,6 +10,7 @@ import {
   parseBlePermissionState,
   parseBluetoothState,
   parseNativeBleEvent,
+  parseRssi,
   type ValidationResult,
 } from '@beacon/validation';
 import type { EventSubscription } from 'react-native';
@@ -51,6 +52,18 @@ export function createNativeBleClient(spec: Spec): BleClient {
       return callVoid(() => spec.stopScan());
     },
 
+    connect(deviceId: string): Promise<void> {
+      return callVoid(() => spec.connect(deviceId), 'connection_failed');
+    },
+
+    disconnect(deviceId: string): Promise<void> {
+      return callVoid(() => spec.disconnect(deviceId));
+    },
+
+    readRssi(deviceId: string): Promise<number> {
+      return callValidated(() => spec.readRssi(deviceId), parseRssi);
+    },
+
     subscribe(listener: (event: NativeBleEvent) => void): Unsubscribe {
       const deliver = (candidate: unknown) => {
         const result = parseNativeBleEvent(candidate);
@@ -64,6 +77,13 @@ export function createNativeBleClient(spec: Spec): BleClient {
         }),
         spec.onDeviceDiscovered(payload => {
           deliver({ type: 'scan.device_discovered', device: payload });
+        }),
+        spec.onConnectionStateChanged(payload => {
+          deliver({
+            type: 'connection.state_changed',
+            deviceId: payload.deviceId,
+            state: payload.state,
+          });
         }),
         spec.onBleError(payload => {
           deliver({
@@ -102,10 +122,13 @@ async function callValidated<TRaw, TValue>(
 }
 
 /** Awaits a native call that carries no result, mapping rejections to BleError. */
-async function callVoid(call: () => Promise<void>): Promise<void> {
+async function callVoid(
+  call: () => Promise<void>,
+  fallback: Parameters<typeof toBleError>[1] = 'native_failure',
+): Promise<void> {
   try {
     await call();
   } catch (error) {
-    throw toBleError(error, 'native_failure');
+    throw toBleError(error, fallback);
   }
 }

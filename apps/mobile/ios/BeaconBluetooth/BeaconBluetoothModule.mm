@@ -30,8 +30,15 @@
     _manager.onDeviceDiscovered = ^(NSDictionary<NSString *, id> *device) {
       [weakSelf emitOnDeviceDiscovered:device];
     };
-    _manager.onError = ^(NSDictionary<NSString *, id> *error) {
-      [weakSelf emitOnBleError:@{@"error" : error}];
+    _manager.onConnectionStateChanged = ^(NSString *deviceId, NSString *state) {
+      [weakSelf emitOnConnectionStateChanged:@{@"deviceId" : deviceId, @"state" : state}];
+    };
+    _manager.onError = ^(NSString *_Nullable deviceId, NSDictionary<NSString *, id> *error) {
+      if (deviceId == nil) {
+        [weakSelf emitOnBleError:@{@"error" : error}];
+      } else {
+        [weakSelf emitOnBleError:@{@"deviceId" : deviceId, @"error" : error}];
+      }
     };
   }
   return self;
@@ -81,6 +88,40 @@
   [self.manager stopScan:^(NSDictionary<NSString *, id> *error) {
     [BeaconBluetoothModule settle:error resolve:resolve reject:reject];
   }];
+}
+
+- (void)connect:(NSString *)deviceId
+        resolve:(RCTPromiseResolveBlock)resolve
+         reject:(RCTPromiseRejectBlock)reject
+{
+  [self.manager connect:deviceId
+             completion:^(NSDictionary<NSString *, id> *error) {
+               [BeaconBluetoothModule settle:error resolve:resolve reject:reject];
+             }];
+}
+
+- (void)disconnect:(NSString *)deviceId
+           resolve:(RCTPromiseResolveBlock)resolve
+            reject:(RCTPromiseRejectBlock)reject
+{
+  [self.manager disconnect:deviceId
+                completion:^{
+                  resolve(nil);
+                }];
+}
+
+- (void)readRssi:(NSString *)deviceId
+         resolve:(RCTPromiseResolveBlock)resolve
+          reject:(RCTPromiseRejectBlock)reject
+{
+  [self.manager readRssi:deviceId
+              completion:^(NSNumber *rssi, NSDictionary<NSString *, id> *error) {
+                if (error != nil) {
+                  [BeaconBluetoothModule settle:error resolve:resolve reject:reject];
+                } else {
+                  resolve(rssi);
+                }
+              }];
 }
 
 /// Resolves a void promise, or rejects it with the contract `code` and message from a

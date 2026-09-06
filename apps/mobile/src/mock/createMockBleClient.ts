@@ -2,6 +2,7 @@ import {
   BleError,
   type BlePermissionState,
   type BluetoothState,
+  type ConnectionState,
   type NativeBleEvent,
   type ScanOptions,
   type Unsubscribe,
@@ -23,6 +24,8 @@ export interface MockBleClientOptions {
   initialPermissionState?: BlePermissionState;
   /** Simulated bridge latency for every call. */
   latencyMs?: number;
+  /** Time between each connection transition (connecting → connected → discovering → ready). */
+  connectStepMs?: number;
   scheduler?: MockScheduler;
   /** Uniform random source in [0, 1); injectable for deterministic tests. */
   random?: () => number;
@@ -31,7 +34,7 @@ export interface MockBleClientOptions {
 
 /** Test and demo hooks that the real bridge does not have. */
 export interface MockBleClient extends BleClient {
-  /** Changes the simulated adapter state and emits the change event. */
+  /** Changes the simulated adapter state and emits the change event; drops every link when not powered on. */
   setAdapterState(state: BluetoothState): void;
   /** Changes what getPermissionState / requestPermission answer. */
   setPermissionState(state: BlePermissionState): void;
@@ -39,6 +42,13 @@ export interface MockBleClient extends BleClient {
   failNextScanStart(error: BleError): void;
   /** Emits a scanner failure as the platform would after a scan was running. */
   failRunningScan(error: BleError): void;
+  /** Makes the next connect to this device fail (once) after the connecting step. */
+  failNextConnect(deviceId: string, error: BleError): void;
+  /** Makes the next connect to this device never complete, so the JS timeout has to act. */
+  stallNextConnect(deviceId: string): void;
+  /** Simulates the peripheral dropping an established link. */
+  dropConnection(deviceId: string): void;
+  connectionStateOf(deviceId: string): ConnectionState;
   readonly isScanning: boolean;
 }
 
@@ -49,16 +59,27 @@ const globalScheduler: MockScheduler = {
   clearInterval: handle => clearInterval(handle as ReturnType<typeof setInterval>),
 };
 
+interface MockLink {
+  state: ConnectionState;
+  /** Pending step timer while connecting or disconnecting. */
+  timer?: unknown;
+  pendingConnect?: { resolve: () => void; reject: (error: BleError) => void };
+  pendingDisconnect: Array<() => void>;
+}
+
 /**
- * In-process implementation of the M2 BleClient surface with scripted
+ * In-process implementation of the M3 BleClient surface with scripted
  * peripherals (PROJECT.md 39). Behaves like native where it matters:
  * subscribe-before-read ordering, validated-shaped payloads, scan refusal when
- * the radio is off or permission is missing, and events that stop when the scan
- * stops. Selected at runtime through `USE_MOCK_BLE_CLIENT` in bootstrap.
+ * the radio is off or permission is missing, events that stop when the scan
+ * stops, connection transitions emitted one by one, errors emitted before the
+ * `disconnected` they cause, and links dropped when the radio turns off.
+ * Selected at runtime through `USE_MOCK_BLE_CLIENT` in bootstrap.
  */
 export function createMockBleClient(options: MockBleClientOptions = {}): MockBleClient {
   const peripherals = options.peripherals ?? defaultMockPeripherals;
   const latencyMs = options.latencyMs ?? 30;
+  const connectStepMs = options.connectStepMs ?? 250;
   const scheduler = options.scheduler ?? globalScheduler;
   const random = options.random ?? Math.random;
   const now = options.now ?? Date.now;
@@ -66,9 +87,12 @@ export function createMockBleClient(options: MockBleClientOptions = {}): MockBle
   let adapterState: BluetoothState = options.initialAdapterState ?? 'powered_on';
   let permissionState: BlePermissionState = options.initialPermissionState ?? 'granted';
   let nextScanStartError: BleError | undefined;
+  const nextConnectErrors = new Map<string, BleError>();
+  const stalledConnects = new Set<string>();
   const listeners = new Set<(event: NativeBleEvent) => void>();
   const advertisers = new Map<string, unknown>();
   const rssiByPeripheral = new Map<string, number>();
+  const links = new Map<string, MockLink>();
   let scanFilter: string[] = [];
 
   const emit = (event: NativeBleEvent) => {
@@ -86,7 +110,7 @@ export function createMockBleClient(options: MockBleClientOptions = {}): MockBle
       }, latencyMs);
     });
 
-  const advertise = (peripheral: MockPeripheral) => {
+  const driftRssi = (peripheral: MockPeripheral): number => {
     const previous = rssiByPeripheral.get(peripheral.id) ?? peripheral.baseRssi;
     const step = Math.round((random() - 0.5) * 2 * peripheral.rssiJitter * 0.5);
     const drifted = clamp(
@@ -95,6 +119,10 @@ export function createMockBleClient(options: MockBleClientOptions = {}): MockBle
       peripheral.baseRssi + peripheral.rssiJitter,
     );
     rssiByPeripheral.set(peripheral.id, drifted);
+    return drifted;
+  };
+
+  const advertise = (peripheral: MockPeripheral) => {
     emit({
       type: 'scan.device_discovered',
       device: {
@@ -103,7 +131,7 @@ export function createMockBleClient(options: MockBleClientOptions = {}): MockBle
         ...(peripheral.localName === undefined
           ? {}
           : { localName: peripheral.localName }),
-        rssi: drifted,
+        rssi: driftRssi(peripheral),
         connectable: peripheral.connectable,
         ...(peripheral.manufacturerData === undefined
           ? {}
@@ -135,6 +163,83 @@ export function createMockBleClient(options: MockBleClientOptions = {}): MockBle
     }
   };
 
+  const linkOf = (deviceId: string): MockLink => {
+    let link = links.get(deviceId);
+    if (link === undefined) {
+      link = { state: 'disconnected', pendingDisconnect: [] };
+      links.set(deviceId, link);
+    }
+    return link;
+  };
+
+  const setLinkState = (deviceId: string, link: MockLink, state: ConnectionState) => {
+    link.state = state;
+    emit({ type: 'connection.state_changed', deviceId, state });
+  };
+
+  const clearStep = (link: MockLink) => {
+    if (link.timer !== undefined) {
+      scheduler.clearTimeout(link.timer);
+      link.timer = undefined;
+    }
+  };
+
+  /** Ends a link with an error (remote drop, failure) or cleanly (undefined). */
+  const endLink = (deviceId: string, link: MockLink, error: BleError | undefined) => {
+    clearStep(link);
+    if (error !== undefined) {
+      emit({ type: 'ble.error', deviceId, error: error.toInfo() });
+      link.pendingConnect?.reject(error);
+    } else {
+      link.pendingConnect?.reject(
+        new BleError({ code: 'disconnected', message: 'Connection cancelled' }),
+      );
+    }
+    link.pendingConnect = undefined;
+    setLinkState(deviceId, link, 'disconnected');
+    const waiters = link.pendingDisconnect;
+    link.pendingDisconnect = [];
+    waiters.forEach(resolve => resolve());
+  };
+
+  const stepConnection = (deviceId: string, link: MockLink) => {
+    const next: Partial<Record<ConnectionState, ConnectionState>> = {
+      connecting: 'connected',
+      connected: 'discovering_services',
+      discovering_services: 'ready',
+    };
+    const target = next[link.state];
+    if (target === undefined) {
+      return;
+    }
+    link.timer = scheduler.setTimeout(() => {
+      link.timer = undefined;
+      if (target === 'connected') {
+        const failure = nextConnectErrors.get(deviceId);
+        if (failure !== undefined) {
+          nextConnectErrors.delete(deviceId);
+          endLink(deviceId, link, failure);
+          return;
+        }
+      }
+      setLinkState(deviceId, link, target);
+      if (target === 'ready') {
+        link.pendingConnect?.resolve();
+        link.pendingConnect = undefined;
+      } else {
+        stepConnection(deviceId, link);
+      }
+    }, connectStepMs);
+  };
+
+  const dropAllLinks = (error: BleError) => {
+    links.forEach((link, deviceId) => {
+      if (link.state !== 'disconnected') {
+        endLink(deviceId, link, error);
+      }
+    });
+  };
+
   return {
     get isScanning() {
       return advertisers.size > 0;
@@ -159,24 +264,7 @@ export function createMockBleClient(options: MockBleClientOptions = {}): MockBle
           nextScanStartError = undefined;
           throw error;
         }
-        if (adapterState === 'unsupported') {
-          throw new BleError({
-            code: 'bluetooth_unsupported',
-            message: 'This device has no Bluetooth Low Energy radio',
-          });
-        }
-        if (permissionState !== 'granted') {
-          throw new BleError({
-            code: 'permission_denied',
-            message: 'Bluetooth permission has not been granted',
-          });
-        }
-        if (adapterState !== 'powered_on') {
-          throw new BleError({
-            code: 'bluetooth_powered_off',
-            message: 'Bluetooth is not powered on',
-          });
-        }
+        assertRadioUsable();
         if (advertisers.size > 0) {
           return;
         }
@@ -189,6 +277,87 @@ export function createMockBleClient(options: MockBleClientOptions = {}): MockBle
         stopAdvertising();
       }),
 
+    connect: (deviceId: string) =>
+      new Promise<void>((resolve, reject) => {
+        scheduler.setTimeout(() => {
+          try {
+            assertRadioUsable();
+          } catch (error) {
+            reject(error as Error);
+            return;
+          }
+          const peripheral = peripherals.find(candidate => candidate.id === deviceId);
+          if (peripheral === undefined) {
+            reject(
+              new BleError({
+                code: 'device_not_found',
+                message: `Unknown device ${deviceId}`,
+              }),
+            );
+            return;
+          }
+          const link = linkOf(deviceId);
+          if (link.state === 'ready') {
+            resolve();
+            return;
+          }
+          if (link.state !== 'disconnected') {
+            reject(
+              new BleError({
+                code: 'connection_failed',
+                message: `A connection to ${deviceId} is already in progress`,
+              }),
+            );
+            return;
+          }
+          link.pendingConnect = { resolve, reject };
+          setLinkState(deviceId, link, 'connecting');
+          if (stalledConnects.delete(deviceId)) {
+            return;
+          }
+          stepConnection(deviceId, link);
+        }, latencyMs);
+      }),
+
+    disconnect: (deviceId: string) =>
+      new Promise<void>(resolve => {
+        scheduler.setTimeout(() => {
+          const link = linkOf(deviceId);
+          if (link.state === 'disconnected') {
+            resolve();
+            return;
+          }
+          link.pendingDisconnect.push(resolve);
+          if (link.state === 'disconnecting') {
+            return;
+          }
+          const wasConnecting = link.state === 'connecting';
+          clearStep(link);
+          if (wasConnecting) {
+            endLink(deviceId, link, undefined);
+            return;
+          }
+          setLinkState(deviceId, link, 'disconnecting');
+          link.timer = scheduler.setTimeout(() => {
+            link.timer = undefined;
+            endLink(deviceId, link, undefined);
+          }, connectStepMs);
+        }, latencyMs);
+      }),
+
+    readRssi: (deviceId: string) =>
+      later(() => {
+        const link = links.get(deviceId);
+        const peripheral = peripherals.find(candidate => candidate.id === deviceId);
+        if (link === undefined || link.state !== 'ready' || peripheral === undefined) {
+          throw new BleError({
+            code: 'disconnected',
+            message: `Not connected to ${deviceId}`,
+          });
+        }
+        return driftRssi(peripheral);
+      }),
+
     subscribe(listener: (event: NativeBleEvent) => void): Unsubscribe {
       listeners.add(listener);
       return () => {
@@ -199,8 +368,14 @@ export function createMockBleClient(options: MockBleClientOptions = {}): MockBle
     setAdapterState(state: BluetoothState) {
       adapterState = state;
       if (state !== 'powered_on') {
-        // The platform drops the scan when the radio goes away.
+        // The platform drops the scan and every link when the radio goes away.
         stopAdvertising();
+        dropAllLinks(
+          new BleError({
+            code: 'bluetooth_powered_off',
+            message: 'Bluetooth turned off',
+          }),
+        );
       }
       emit({ type: 'bluetooth.state_changed', state });
     },
@@ -217,7 +392,55 @@ export function createMockBleClient(options: MockBleClientOptions = {}): MockBle
       stopAdvertising();
       emit({ type: 'ble.error', error: error.toInfo() });
     },
+
+    failNextConnect(deviceId: string, error: BleError) {
+      nextConnectErrors.set(deviceId, error);
+    },
+
+    stallNextConnect(deviceId: string) {
+      stalledConnects.add(deviceId);
+    },
+
+    dropConnection(deviceId: string) {
+      const link = links.get(deviceId);
+      if (link === undefined || link.state === 'disconnected') {
+        return;
+      }
+      endLink(
+        deviceId,
+        link,
+        new BleError({
+          code: 'disconnected',
+          message: 'The peripheral closed the connection',
+        }),
+      );
+    },
+
+    connectionStateOf(deviceId: string): ConnectionState {
+      return links.get(deviceId)?.state ?? 'disconnected';
+    },
   };
+
+  function assertRadioUsable(): void {
+    if (adapterState === 'unsupported') {
+      throw new BleError({
+        code: 'bluetooth_unsupported',
+        message: 'This device has no Bluetooth Low Energy radio',
+      });
+    }
+    if (permissionState !== 'granted') {
+      throw new BleError({
+        code: 'permission_denied',
+        message: 'Bluetooth permission has not been granted',
+      });
+    }
+    if (adapterState !== 'powered_on') {
+      throw new BleError({
+        code: 'bluetooth_powered_off',
+        message: 'Bluetooth is not powered on',
+      });
+    }
+  }
 }
 
 function matchesFilter(peripheral: MockPeripheral, serviceUuids: string[]): boolean {
