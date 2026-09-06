@@ -3,6 +3,7 @@ import {
   type BlePermissionState,
   type BluetoothState,
   type NativeBleEvent,
+  type ScanOptions,
   type Unsubscribe,
 } from '@beacon/ble-contracts';
 import {
@@ -11,6 +12,7 @@ import {
   parseNativeBleEvent,
   type ValidationResult,
 } from '@beacon/validation';
+import type { EventSubscription } from 'react-native';
 import type { BleClient } from './BleClient';
 import type { Spec } from './specs/NativeBeaconBluetooth';
 
@@ -39,18 +41,40 @@ export function createNativeBleClient(spec: Spec): BleClient {
       return callValidated(() => spec.requestPermission(), parseBlePermissionState);
     },
 
+    startScan(options?: ScanOptions): Promise<void> {
+      return callVoid(() =>
+        spec.startScan(options?.serviceUuids ?? [], options?.allowDuplicates ?? false),
+      );
+    },
+
+    stopScan(): Promise<void> {
+      return callVoid(() => spec.stopScan());
+    },
+
     subscribe(listener: (event: NativeBleEvent) => void): Unsubscribe {
-      const subscription = spec.onBluetoothStateChanged(payload => {
-        const result = parseNativeBleEvent({
-          type: 'bluetooth.state_changed',
-          state: payload.state,
-        });
+      const deliver = (candidate: unknown) => {
+        const result = parseNativeBleEvent(candidate);
         listener(
           result.ok ? result.value : { type: 'ble.error', error: result.error.toInfo() },
         );
-      });
+      };
+      const subscriptions: EventSubscription[] = [
+        spec.onBluetoothStateChanged(payload => {
+          deliver({ type: 'bluetooth.state_changed', state: payload.state });
+        }),
+        spec.onDeviceDiscovered(payload => {
+          deliver({ type: 'scan.device_discovered', device: payload });
+        }),
+        spec.onBleError(payload => {
+          deliver({
+            type: 'ble.error',
+            deviceId: payload.deviceId,
+            error: payload.error,
+          });
+        }),
+      ];
       return () => {
-        subscription.remove();
+        subscriptions.forEach(subscription => subscription.remove());
       };
     },
   };
@@ -75,4 +99,13 @@ async function callValidated<TRaw, TValue>(
     throw result.error;
   }
   return result.value;
+}
+
+/** Awaits a native call that carries no result, mapping rejections to BleError. */
+async function callVoid(call: () => Promise<void>): Promise<void> {
+  try {
+    await call();
+  } catch (error) {
+    throw toBleError(error, 'native_failure');
+  }
 }
