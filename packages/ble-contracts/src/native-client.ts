@@ -1,6 +1,7 @@
 import type { BluetoothState } from './bluetooth-state';
 import type { GattService } from './gatt';
 import type { NativeBleEvent } from './native-events';
+import type { BlePermissionState } from './permissions';
 
 /**
  * Typed contract implemented by the native bridge wrapper and by MockBleClient.
@@ -24,6 +25,23 @@ export interface BleEventSource {
 
 export interface BluetoothAdapterApi extends BleEventSource {
   getBluetoothState(): Promise<BluetoothState>;
+}
+
+/**
+ * Runtime permission to use Bluetooth.
+ *
+ * Platform notes:
+ * - iOS reads CBManager.authorization; the system prompt appears when the central
+ *   manager is first created, so requestPermission() creates it and waits for the answer.
+ *   A denied answer is permanent ("blocked"); iOS never re-prompts.
+ * - Android requests BLUETOOTH_SCAN + BLUETOOTH_CONNECT on API 31+ and
+ *   ACCESS_FINE_LOCATION on API 30 and below. "denied" means a prompt can be shown
+ *   again; "blocked" means the user chose "don't ask again" and must use Settings.
+ */
+export interface PermissionApi {
+  getPermissionState(): Promise<BlePermissionState>;
+  /** Shows the system prompt when possible and resolves with the resulting state. */
+  requestPermission(): Promise<BlePermissionState>;
 }
 
 export interface ScanOptions {
@@ -73,4 +91,4 @@ export interface GattApi {
 }
 
 export interface NativeBleClient
-  extends BluetoothAdapterApi, ScanApi, ConnectionApi, GattApi {}
+  extends BluetoothAdapterApi, PermissionApi, ScanApi, ConnectionApi, GattApi {}

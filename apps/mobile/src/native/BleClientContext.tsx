@@ -1,10 +1,10 @@
 import React, { createContext, useContext, type PropsWithChildren } from 'react';
-import type { BluetoothAdapterApi } from '@beacon/ble-contracts';
+import type { BleClient } from './BleClient';
 
-const BleClientContext = createContext<BluetoothAdapterApi | undefined>(undefined);
+const BleClientContext = createContext<BleClient | undefined>(undefined);
 
 export interface BleClientProviderProps {
-  client: BluetoothAdapterApi;
+  client: BleClient;
 }
 
 export function BleClientProvider({
@@ -15,10 +15,10 @@ export function BleClientProvider({
 }
 
 /** Throws early and loudly if a screen is rendered outside the provider. */
-export function useBluetoothAdapterClient(): BluetoothAdapterApi {
+export function useBleClient(): BleClient {
   const client = useContext(BleClientContext);
   if (client === undefined) {
-    throw new Error('useBluetoothAdapterClient must be used within a BleClientProvider');
+    throw new Error('useBleClient must be used within a BleClientProvider');
   }
   return client;
 }

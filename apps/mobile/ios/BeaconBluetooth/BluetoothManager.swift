@@ -21,6 +21,7 @@ public final class BluetoothManager: NSObject {
   private var central: CBCentralManager?
   private var hasReceivedInitialState = false
   private var pendingStateRequests: [(String) -> Void] = []
+  private var pendingAuthorizationRequests: [(String) -> Void] = []
   private var isInvalidated = false
 
   /// Upper bound on how long a state request may wait for `centralManagerDidUpdateState`.
@@ -29,11 +30,28 @@ public final class BluetoothManager: NSObject {
 
   /// Resolves with the current adapter state, waiting for CoreBluetooth's first state report
   /// if the central manager was just created.
+  ///
+  /// Authorization gates this call: while the user has not answered the Bluetooth prompt,
+  /// creating a central manager would show it, so the state is reported as `unknown` until
+  /// `requestPermission` runs. A refused authorization is reported as `unauthorized` without
+  /// touching CoreBluetooth at all.
   @objc public func getBluetoothState(_ completion: @escaping (String) -> Void) {
     queue.async { [self] in
       guard !isInvalidated else {
         completion(BleAdapterState.unknown.rawValue)
         return
+      }
+      switch CBManager.authorization {
+      case .notDetermined:
+        completion(BleAdapterState.unknown.rawValue)
+        return
+      case .denied, .restricted:
+        completion(BleAdapterState.unauthorized.rawValue)
+        return
+      case .allowedAlways:
+        break
+      @unknown default:
+        break
       }
       let central = ensureCentral()
       if hasReceivedInitialState {
@@ -47,6 +65,32 @@ public final class BluetoothManager: NSObject {
     }
   }
 
+  /// Resolves with the current permission state. Never shows a prompt.
+  @objc public func getPermissionState(_ completion: @escaping (String) -> Void) {
+    queue.async {
+      completion(AuthorizationMapper.map(CBManager.authorization).rawValue)
+    }
+  }
+
+  /// Shows the system Bluetooth prompt when authorization is still undetermined and resolves
+  /// once the user has answered. Resolves immediately with the current state otherwise.
+  ///
+  /// The prompt is a side effect of creating the first `CBCentralManager`; CoreBluetooth then
+  /// delivers `centralManagerDidUpdateState` after the user's answer, which is where pending
+  /// requests are completed. There is deliberately no timeout: the user may take as long as
+  /// they like, and the JavaScript side shows a "requesting" state meanwhile.
+  @objc public func requestPermission(_ completion: @escaping (String) -> Void) {
+    queue.async { [self] in
+      let current = AuthorizationMapper.map(CBManager.authorization)
+      guard !isInvalidated, current == .notRequested else {
+        completion(current.rawValue)
+        return
+      }
+      pendingAuthorizationRequests.append(completion)
+      _ = ensureCentral()
+    }
+  }
+
   /// Releases CoreBluetooth resources. Called when the React instance is torn down.
   @objc public func invalidate() {
     queue.async { [self] in
@@ -54,6 +98,7 @@ public final class BluetoothManager: NSObject {
       central?.delegate = nil
       central = nil
       flushPendingRequests(with: .unknown, onlyIfStillWaiting: false)
+      flushPendingAuthorizationRequests()
       onStateChanged = nil
     }
   }
@@ -82,11 +127,21 @@ public final class BluetoothManager: NSObject {
     requests.forEach { $0(state.rawValue) }
   }
 
+  private func flushPendingAuthorizationRequests() {
+    let requests = pendingAuthorizationRequests
+    pendingAuthorizationRequests.removeAll()
+    let state = AuthorizationMapper.map(CBManager.authorization).rawValue
+    requests.forEach { $0(state) }
+  }
+
   fileprivate func handleCentralStateUpdate(_ central: CBCentralManager) {
     guard !isInvalidated else { return }
     let state = BluetoothStateMapper.map(central.state)
     hasReceivedInitialState = true
     flushPendingRequests(with: state, onlyIfStillWaiting: false)
+    if CBManager.authorization != .notDetermined {
+      flushPendingAuthorizationRequests()
+    }
     onStateChanged?(state.rawValue)
   }
 }

@@ -1,6 +1,6 @@
 import React from 'react';
 import { App } from './App';
-import { createNativeBluetoothAdapterClient } from '../native/createNativeBluetoothAdapterClient';
+import { createNativeBleClient } from '../native/createNativeBleClient';
 import NativeBeaconBluetooth from '../native/specs/NativeBeaconBluetooth';
 
 /**
@@ -9,7 +9,7 @@ import NativeBeaconBluetooth from '../native/specs/NativeBeaconBluetooth';
  * the future MockBleClient (M10) can substitute it without mocking modules.
  */
 export function createRootComponent(): React.ComponentType {
-  const bleClient = createNativeBluetoothAdapterClient(NativeBeaconBluetooth);
+  const bleClient = createNativeBleClient(NativeBeaconBluetooth);
 
   function Root(): React.JSX.Element {
     return <App bleClient={bleClient} />;

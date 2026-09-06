@@ -1,26 +1,49 @@
 # Permissions
 
-Permission handling is centralized (PROJECT.md 12). M0 declares what the platforms require;
-the runtime request flow and `BlePermissionState` mapping ship with M1.
+Permission handling is centralized (PROJECT.md 12). M0 declared what the platforms require;
+M1 added the runtime flow: a `PermissionApi` on the bridge, a permission state machine in the
+UI layer, and settings guidance derived from adapter state and permission together.
 
 ## Contract
 
 ```ts
 type BlePermissionState = 'unknown' | 'not_requested' | 'granted' | 'denied' | 'blocked';
+
+interface PermissionApi {
+  getPermissionState(): Promise<BlePermissionState>; // never prompts
+  requestPermission(): Promise<BlePermissionState>; // prompts when possible, resolves with the result
+}
 ```
 
-`blocked` means the user must change the setting in the OS Settings app; re-requesting from the
-app will not show a prompt.
+| State           | Meaning                                                                 |
+| --------------- | ----------------------------------------------------------------------- |
+| `not_requested` | The app has never asked; `requestPermission()` will show the prompt.    |
+| `granted`       | Scanning and connecting are allowed.                                    |
+| `denied`        | Declined, but the platform will prompt again (Android only).            |
+| `blocked`       | The user must change the setting in the OS Settings app; no prompt.     |
+| `unknown`       | The platform returned a value outside the known set (future OS values). |
+
+The bridge validates every value with `blePermissionStateSchema`; anything else rejects with
+`invalid_payload`.
 
 ## iOS
 
 - `NSBluetoothAlwaysUsageDescription` is declared in `Info.plist`. Without it CoreBluetooth
   terminates the app when the central manager is created.
-- The system prompt appears the first time a `CBCentralManager` is created. `BluetoothManager`
-  defers creation until JavaScript first asks for adapter state, so the prompt is tied to a user
-  visible action rather than app launch.
-- Authorization is read from `CBManager.authorization` (M1). A denied authorization surfaces as
-  `BluetoothState.unauthorized` from the adapter as well.
+- Authorization is read from `CBManager.authorization` and mapped by
+  `AuthorizationMapper.swift`: `.notDetermined` → `not_requested`, `.allowedAlways` →
+  `granted`, `.denied` and `.restricted` → `blocked`. iOS never re-prompts, so `denied` is
+  never produced on iOS.
+- The prompt is a side effect of creating the first `CBCentralManager`. `BluetoothManager`
+  therefore:
+  - does **not** create the central while authorization is undetermined, and reports the
+    adapter state as `unknown` until then (so app launch never prompts);
+  - creates it inside `requestPermission()` and completes the request from
+    `centralManagerDidUpdateState`, which CoreBluetooth calls after the user answers;
+  - reports `unauthorized` as the adapter state when authorization was refused, without
+    touching CoreBluetooth.
+- After a refusal the only remedy is the Settings app; the UI opens the app's settings page
+  via `Linking.openSettings()`.
 - No background modes are declared. Background scanning is a stretch goal and would require
   `bluetooth-central` in `UIBackgroundModes` plus explicit product intent.
 
@@ -38,9 +61,37 @@ Declared in `AndroidManifest.xml`:
 `<uses-feature android.hardware.bluetooth_le required="false">` keeps the app installable on
 devices without BLE; the adapter reports `unsupported` instead.
 
-Reading `BluetoothAdapter.getState()` and observing `ACTION_STATE_CHANGED` need no runtime
-permission on any supported API level, so M0 never triggers a permission dialog on Android.
+Runtime flow (`permissions/PermissionController.kt`):
 
-M1 will request only the permissions the running API level needs (PROJECT.md 12): scan and
-connect on 31+, fine location on 30 and below, and map `shouldShowRequestPermissionRationale`
-outcomes to `denied` versus `blocked`.
+- `RequiredPermissions.forApiLevel` returns `BLUETOOTH_SCAN` + `BLUETOOTH_CONNECT` on API 31+
+  and `ACCESS_FINE_LOCATION` on API 30 and below. Nothing else is ever requested.
+- `PermissionStateMapper.resolve` turns three facts into the contract state: whether every
+  permission is granted, whether `shouldShowRequestPermissionRationale` is true for a missing
+  one, and whether the app has requested before. The last fact is persisted in
+  `SharedPreferences`, because Android reports rationale = false both before the first request
+  and after "don't ask again".
+- `requestPermission()` needs the foreground `PermissionAwareActivity` (React Native routes
+  `onRequestPermissionsResult` through it); without one it rejects with `native_failure`.
+  One request may be in flight at a time. The request is always attempted when something is
+  missing: if the user chose "don't ask again", the platform answers immediately and the
+  resulting state is still accurate.
+- Reading `BluetoothAdapter.getState()` and observing `ACTION_STATE_CHANGED` need no runtime
+  permission, so adapter state is available before any prompt.
+
+## UI behaviour
+
+`useBluetoothPermission` reads the state on mount and again whenever the app returns to the
+foreground (`AppState`), so a change made in Settings is picked up without a restart.
+Foreground re-checks are ignored while a prompt is in flight.
+
+`deriveBluetoothReadiness` combines adapter and permission state into one instruction for the
+user, in this precedence: failure, unsupported hardware, prompt in flight, checking, permission,
+adapter power state. Each readiness state maps to at most one action:
+
+| Readiness              | Action                                                       |
+| ---------------------- | ------------------------------------------------------------ |
+| `permission_required`  | Ask (`requestPermission`)                                    |
+| `permission_blocked`   | Open app settings                                            |
+| `powered_off`          | Android: Bluetooth settings intent; iOS: app settings + text |
+| `failed`               | Retry both reads                                             |
+| `unsupported`, `ready` | None                                                         |
