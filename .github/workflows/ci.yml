@@ -62,13 +62,17 @@ jobs:
       - name: Kotlin unit tests
         working-directory: apps/mobile/android
         run: ./gradlew :app:testDebugUnitTest --no-daemon
-      - name: Assemble debug APK
+      # The release variant embeds the Hermes JS bundle, so the APK runs on a phone
+      # without a Metro server. A debug APK would show "Unable to load script" when
+      # sideloaded. The template signs release builds with the debug keystore, which
+      # is fine for sideloading and CI; store distribution needs a real keystore.
+      - name: Assemble standalone (release) APK
         working-directory: apps/mobile/android
-        run: ./gradlew :app:assembleDebug --no-daemon -PreactNativeArchitectures=arm64-v8a
+        run: ./gradlew :app:assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a
       - uses: actions/upload-artifact@v7
         with:
-          name: beacon-debug-apk
-          path: apps/mobile/android/app/build/outputs/apk/debug/*.apk
+          name: beacon-standalone-apk
+          path: apps/mobile/android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
   ios:

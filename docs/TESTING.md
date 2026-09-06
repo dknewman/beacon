@@ -42,8 +42,9 @@ dispatch. Runs for the same ref cancel each other so only the latest push is bui
 
 1. `js` (ubuntu): install, typecheck, lint, format check, Jest with coverage artifact.
 2. `android` (ubuntu, after `js`): Android SDK 37 / NDK 27 / CMake, Gradle
-   `:app:testDebugUnitTest` then `:app:assembleDebug` for arm64 (runs codegen, compiles the
-   Kotlin module, uploads the debug APK as an artifact).
+   `:app:testDebugUnitTest` then `:app:assembleRelease` for arm64 (runs codegen, compiles the
+   Kotlin module, bundles the JavaScript, uploads a standalone APK as an artifact that runs on
+   a phone without Metro).
 3. `ios` (macOS, after `js`): Ruby 3.3 with the committed `Gemfile.lock`, `pod install` with a
    CocoaPods cache, then `xcodebuild test` on the first available iPhone simulator with code
    signing disabled. The `.xcresult` bundle is uploaded when the job fails.
