@@ -51,7 +51,7 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
         with:
           # The hosted image already ships platform android-37.0 and build-tools 37.0.0
           # (API 37 packages carry a minor version; "platforms;android-37" does not exist).
