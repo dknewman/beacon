@@ -82,6 +82,9 @@ export function toBleError(
   if (isBleError(value)) {
     return value;
   }
+  if (isBleErrorInfo(value)) {
+    return new BleError(value);
+  }
   if (value instanceof Error) {
     const code = readErrorCode(value);
     return new BleError(
@@ -90,6 +93,20 @@ export function toBleError(
     );
   }
   return new BleError({ code: fallbackCode, message: String(value) }, { cause: value });
+}
+
+/** A plain `BleErrorInfo` object, as carried by "ble.error" events. */
+export function isBleErrorInfo(value: unknown): value is BleErrorInfo {
+  if (typeof value !== 'object' || value === null || value instanceof Error) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    isBleErrorCode(candidate.code) &&
+    typeof candidate.message === 'string' &&
+    (candidate.nativeCode === undefined || typeof candidate.nativeCode === 'string') &&
+    (candidate.nativeDomain === undefined || typeof candidate.nativeDomain === 'string')
+  );
 }
 
 function readErrorCode(error: Error): BleErrorCode | undefined {

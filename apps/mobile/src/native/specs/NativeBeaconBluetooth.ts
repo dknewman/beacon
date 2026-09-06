@@ -11,9 +11,9 @@
  * application state.
  *
  * Milestone scope: M0 added the adapter state API and its change event; M1 added
- * the permission API; M2 added scanning and the discovery/error events. Later
- * milestones extend this spec (connect, GATT) alongside the Swift and Kotlin
- * implementations.
+ * the permission API; M2 added scanning and the discovery/error events; M3 added
+ * connections. Later milestones extend this spec (GATT) alongside the Swift and
+ * Kotlin implementations.
  */
 import { TurboModuleRegistry, type CodegenTypes, type TurboModule } from 'react-native';
 
@@ -37,6 +37,12 @@ export type DeviceDiscoveredEvent = {
   manufacturerData?: string;
   serviceUuids: string[];
   lastSeenAt: string;
+};
+
+/** Emitted on every native connection transition; `state` is a ConnectionState wire value. */
+export type ConnectionStateChangedEvent = {
+  deviceId: string;
+  state: string;
 };
 
 /** Mirrors BleErrorInfo; `code` is a BleErrorCode wire value. */
@@ -87,13 +93,38 @@ export interface Spec extends TurboModule {
   /** Stops the scan. Resolves even when no scan is running. */
   stopScan(): Promise<void>;
 
+  /**
+   * Connects to a peripheral and discovers its services. Resolves once the
+   * connection is `ready`; every transition is also emitted on
+   * onConnectionStateChanged. Rejects with device_not_found, connection_failed,
+   * disconnected (cancelled by disconnect()) or bluetooth_powered_off. Resolves
+   * immediately when the peripheral is already ready.
+   */
+  connect(deviceId: string): Promise<void>;
+
+  /**
+   * Disconnects, or cancels a connection attempt. Resolves once the platform has
+   * reported the disconnect; resolves immediately when not connected.
+   */
+  disconnect(deviceId: string): Promise<void>;
+
+  /** Reads the RSSI of a connected peripheral in dBm. Rejects with disconnected otherwise. */
+  readRssi(deviceId: string): Promise<number>;
+
   /** Emitted on every adapter state transition after module initialization. */
   readonly onBluetoothStateChanged: CodegenTypes.EventEmitter<BluetoothStateChangedEvent>;
 
   /** Emitted for each (throttled) advertisement while a scan is running. */
   readonly onDeviceDiscovered: CodegenTypes.EventEmitter<DeviceDiscoveredEvent>;
 
-  /** Emitted for asynchronous failures such as the platform scanner stopping itself. */
+  /** Emitted for every per-device connection transition, including remote disconnects. */
+  readonly onConnectionStateChanged: CodegenTypes.EventEmitter<ConnectionStateChangedEvent>;
+
+  /**
+   * Emitted for asynchronous failures: the scanner stopping itself (no deviceId),
+   * a failed connection attempt or a remote disconnect (with deviceId, sent
+   * before the matching `disconnected` state).
+   */
   readonly onBleError: CodegenTypes.EventEmitter<BleErrorEvent>;
 }
 

@@ -8,6 +8,7 @@ import {
 import type { z } from 'zod';
 import { fail, ok, type ValidationResult } from './result';
 import { bluetoothStateSchema } from './schemas/bluetooth-state';
+import { rssiSchema } from './schemas/primitives';
 import { nativeBleEventSchema } from './schemas/native-events';
 import { blePermissionStateSchema } from './schemas/permissions';
 
@@ -54,4 +55,8 @@ export function parseNativeBleEvent(
   input: unknown,
 ): ValidationResult<NativeBleEvent, BleError> {
   return validate(nativeBleEventSchema, input, 'Invalid native BLE event');
+}
+
+export function parseRssi(input: unknown): ValidationResult<number, BleError> {
+  return validate(rssiSchema, input, 'Invalid RSSI from native');
 }

@@ -1,6 +1,6 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import { toShortUuid } from '@beacon/ble-contracts';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { toShortUuid, type ConnectionState } from '@beacon/ble-contracts';
 import { useTheme } from '../../theme/useTheme';
 import type { CachedDevice } from './deviceCache';
 import { describeLastSeen } from './lastSeen';
@@ -8,6 +8,8 @@ import { describeLastSeen } from './lastSeen';
 export interface DeviceRowProps {
   device: CachedDevice;
   now: number;
+  connectionState: ConnectionState;
+  onPress: (deviceId: string) => void;
 }
 
 const MANUFACTURER_PREVIEW_BYTES = 8;
@@ -20,6 +22,8 @@ const MANUFACTURER_PREVIEW_BYTES = 8;
 export const DeviceRow = React.memo(function DeviceRowInner({
   device,
   now,
+  connectionState,
+  onPress,
 }: DeviceRowProps): React.JSX.Element {
   const theme = useTheme();
   const title = displayName(device);
@@ -27,12 +31,18 @@ export const DeviceRow = React.memo(function DeviceRowInner({
   const lastSeen = describeLastSeen(device.lastSeenAt, now);
   const services = device.serviceUuids.map(uuid => toShortUuid(uuid) ?? uuid);
   const manufacturer = previewHex(device.manufacturerData);
+  const badge = connectionBadge(connectionState);
 
   return (
-    <View
-      accessible
-      accessibilityLabel={`${title}, ${rssi}, last seen ${lastSeen}`}
-      style={[styles.row, { backgroundColor: theme.colors.surface }]}
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${title}, ${rssi}, last seen ${lastSeen}${badge === undefined ? '' : `, ${badge}`}`}
+      accessibilityHint="Opens the device detail"
+      onPress={() => onPress(device.id)}
+      style={({ pressed }) => [
+        styles.row,
+        { backgroundColor: theme.colors.surface, opacity: pressed ? 0.7 : 1 },
+      ]}
       testID={`device-${device.id}`}
     >
       <View style={styles.headline}>
@@ -60,6 +70,7 @@ export const DeviceRow = React.memo(function DeviceRowInner({
           : device.connectable
             ? ' · Connectable'
             : ' · Not connectable'}
+        {badge === undefined ? '' : ` · ${badge}`}
       </Text>
       <Text
         numberOfLines={1}
@@ -85,7 +96,7 @@ export const DeviceRow = React.memo(function DeviceRowInner({
           {`Manufacturer: ${manufacturer}`}
         </Text>
       )}
-    </View>
+    </Pressable>
   );
 });
 
@@ -95,6 +106,23 @@ function displayName(device: CachedDevice): string {
 
 function describeRssi(device: CachedDevice): string {
   return device.rssi === undefined ? 'No RSSI' : `${device.rssi} dBm`;
+}
+
+function connectionBadge(state: ConnectionState): string | undefined {
+  switch (state) {
+    case 'disconnected':
+      return undefined;
+    case 'connecting':
+      return 'Connecting';
+    case 'connected':
+    case 'discovering_services':
+    case 'ready':
+      return 'Connected';
+    case 'disconnecting':
+      return 'Disconnecting';
+    case 'failed':
+      return 'Connection failed';
+  }
 }
 
 function previewHex(hex: string | undefined): string | undefined {

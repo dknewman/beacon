@@ -69,6 +69,120 @@ function createClient(overrides: Parameters<typeof createMockBleClient>[0] = {})
   return { client, events, advance: fake.advance, pending: fake.pending };
 }
 
+describe('createMockBleClient connections', () => {
+  const HRM = 'MOCK-HRM-0001';
+  const transitions = (events: NativeBleEvent[], id: string) =>
+    events.flatMap(event =>
+      event.type === 'connection.state_changed' && event.deviceId === id
+        ? [event.state]
+        : [],
+    );
+
+  it('walks the native transition sequence and resolves connect on ready', async () => {
+    const { client, events, advance } = createClient({ connectStepMs: 100 });
+    const connectCall = client.connect(HRM);
+    await advance(10);
+    expect(client.connectionStateOf(HRM)).toBe('connecting');
+    await advance(300);
+    await connectCall;
+    expect(transitions(events, HRM)).toEqual([
+      'connecting',
+      'connected',
+      'discovering_services',
+      'ready',
+    ]);
+    const rssi = client.readRssi(HRM);
+    await advance(10);
+    await expect(rssi).resolves.toBeLessThan(0);
+  });
+
+  it('rejects unknown devices and RSSI reads without a link', async () => {
+    const { client, advance } = createClient();
+    const unknown = client.connect('nope');
+    await advance(10);
+    await expect(unknown).rejects.toMatchObject({ code: 'device_not_found' });
+    const rssi = client.readRssi(HRM);
+    await advance(10);
+    await expect(rssi).rejects.toMatchObject({ code: 'disconnected' });
+  });
+
+  it('disconnects cleanly and cancels an attempt in progress', async () => {
+    const { client, events, advance } = createClient({ connectStepMs: 100 });
+    const first = client.connect(HRM);
+    await advance(310);
+    await first;
+    const disconnectCall = client.disconnect(HRM);
+    await advance(10);
+    expect(client.connectionStateOf(HRM)).toBe('disconnecting');
+    await advance(100);
+    await disconnectCall;
+    expect(client.connectionStateOf(HRM)).toBe('disconnected');
+    expect(events.some(event => event.type === 'ble.error')).toBe(false);
+
+    const second = client.connect(HRM);
+    await advance(10);
+    const cancel = client.disconnect(HRM);
+    await advance(10);
+    await expect(second).rejects.toMatchObject({ code: 'disconnected' });
+    await cancel;
+    expect(client.connectionStateOf(HRM)).toBe('disconnected');
+  });
+
+  it('scripts connection failures, stalls and remote drops with the error first', async () => {
+    const { client, events, advance } = createClient({ connectStepMs: 100 });
+    client.failNextConnect(
+      HRM,
+      new BleError({ code: 'connection_failed', message: 'refused' }),
+    );
+    const failing = client.connect(HRM);
+    await advance(120);
+    await expect(failing).rejects.toMatchObject({ code: 'connection_failed' });
+    const errorIndex = events.findIndex(event => event.type === 'ble.error');
+    const disconnectedIndex = events.findIndex(
+      event =>
+        event.type === 'connection.state_changed' && event.state === 'disconnected',
+    );
+    expect(errorIndex).toBeGreaterThan(-1);
+    expect(errorIndex).toBeLessThan(disconnectedIndex);
+
+    client.stallNextConnect(HRM);
+    const stalled = client.connect(HRM);
+    await advance(10_000);
+    expect(client.connectionStateOf(HRM)).toBe('connecting');
+    const cancelled = client.disconnect(HRM);
+    await advance(10);
+    await expect(stalled).rejects.toMatchObject({ code: 'disconnected' });
+    await cancelled;
+
+    const ok = client.connect(HRM);
+    await advance(320);
+    await ok;
+    client.dropConnection(HRM);
+    expect(events.at(-2)).toMatchObject({
+      type: 'ble.error',
+      deviceId: HRM,
+      error: { code: 'disconnected' },
+    });
+    expect(client.connectionStateOf(HRM)).toBe('disconnected');
+  });
+
+  it('drops every link when the radio turns off', async () => {
+    const { client, events, advance } = createClient({ connectStepMs: 100 });
+    const connectCall = client.connect(HRM);
+    await advance(320);
+    await connectCall;
+    client.setAdapterState('powered_off');
+    expect(client.connectionStateOf(HRM)).toBe('disconnected');
+    expect(
+      events.some(event => event.type === 'ble.error' && event.deviceId === HRM),
+    ).toBe(true);
+    expect(events.at(-1)).toEqual({
+      type: 'bluetooth.state_changed',
+      state: 'powered_off',
+    });
+  });
+});
+
 describe('createMockBleClient', () => {
   it('answers state and permission reads after the simulated latency', async () => {
     const { client, advance } = createClient();

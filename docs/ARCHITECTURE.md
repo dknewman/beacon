@@ -6,41 +6,44 @@ Native consumes a narrow typed bridge; state is explicit.
 
 ## Layers
 
-| Layer          | Location                                                               | Owns                                                                                   | Must not                                 |
-| -------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------- |
-| UI             | `apps/mobile/src/features/**/*Screen.tsx`, `src/components`            | Rendering, accessibility, user intent                                                  | Call the bridge directly, hold BLE state |
-| Application    | `apps/mobile/src/features/**` (reducers, hooks, coordinators)          | Explicit state machines, orchestration, buffering                                      | Import platform APIs                     |
-| Contracts      | `packages/ble-contracts`                                               | Domain models, state unions, error codes, `NativeBleClient` segments, `NativeBleEvent` | Depend on React Native                   |
-| Validation     | `packages/validation`                                                  | zod schemas for every boundary payload, `ValidationResult`                             | Know about UI                            |
-| Bridge wrapper | `apps/mobile/src/native`                                               | Codegen spec, `createNativeBleClient`, dependency injection context, mock client       | Contain BLE policy                       |
-| Native         | `apps/mobile/ios/BeaconBluetooth`, `apps/mobile/android/.../bluetooth` | CoreBluetooth / BluetoothGatt, GATT queue, event emission, error mapping               | Trust JS for connection state            |
+| Layer          | Location                                                                          | Owns                                                                                   | Must not                                 |
+| -------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------- |
+| UI             | `apps/mobile/src/features/**/*Screen.tsx`, `src/components`, `src/app/navigation` | Rendering, accessibility, user intent, routes by id                                    | Call the bridge directly, hold BLE state |
+| Application    | `apps/mobile/src/features/**` (reducers, hooks, coordinators, providers)          | Explicit state machines, orchestration, buffering                                      | Import platform APIs                     |
+| Contracts      | `packages/ble-contracts`                                                          | Domain models, state unions, error codes, `NativeBleClient` segments, `NativeBleEvent` | Depend on React Native                   |
+| Validation     | `packages/validation`                                                             | zod schemas for every boundary payload, `ValidationResult`                             | Know about UI                            |
+| Bridge wrapper | `apps/mobile/src/native`                                                          | Codegen spec, `createNativeBleClient`, dependency injection context, mock client       | Contain BLE policy                       |
+| Native         | `apps/mobile/ios/BeaconBluetooth`, `apps/mobile/android/.../bluetooth`            | CoreBluetooth / BluetoothGatt, GATT queue, event emission, error mapping               | Trust JS for connection state            |
 
 Dependency direction is strictly downward in the table. `packages/*` never import from
 `apps/mobile`.
 
-## Data flow (M0–M2)
+## Data flow (M0–M3)
 
 ```text
-DeviceListScreen
-   │ useBluetoothReadiness()                 useScanCoordinator(readiness)
-   ▼                                          ▼
-adapter + permission reducers ──► readiness ──► scanReducer + deviceCache ──► filters ──► FlatList
-   ▲                                              ▲
-   │ BluetoothAdapterApi / PermissionApi          │ ScanApi + scan.device_discovered / ble.error
+NavigationContainer ─ DeviceListScreen ──(deviceId)──► DeviceDetailScreen
+   ▲ reads                                              ▲ reads by id, polls RSSI while ready
+ScanProvider: readiness + scan coordinator + device cache   ConnectionProvider: per-device machine, timeout
+   ▲                                              ▲                    ▲
+   │ BluetoothAdapterApi / PermissionApi          │ ScanApi            │ ConnectionApi
+   │                                              │ scan.device_discovered / ble.error (no deviceId)
+   │                                              │                    │ connection.state_changed / ble.error (deviceId)
 createNativeBleClient
    │ parseBluetoothState / parseBlePermissionState / parseNativeBleEvent (zod)
    │        ← invalid → BleError("invalid_payload") / ble.error event
    ▼
 NativeBeaconBluetooth (Turbo Module spec, codegen)
    │
-   ├─ iOS: BeaconBluetoothModule.mm → BluetoothManager.swift → CBCentralManager (+ AdvertisementMapper)
-   └─ Android: BeaconBluetoothModule.kt → BluetoothController.kt / BleScanner.kt → BluetoothAdapter / BluetoothLeScanner
+   ├─ iOS: BeaconBluetoothModule.mm → BluetoothManager.swift (+ PeripheralSession) → CBCentralManager / CBPeripheral
+   └─ Android: BeaconBluetoothModule.kt → BluetoothController / BleScanner / ConnectionRegistry → BluetoothAdapter / BluetoothLeScanner / BluetoothGatt
 ```
 
 Ordering rule: subscribe to events before the initial read so a transition during the read is
 not lost. Late results after unmount are ignored by an `active` flag in the effect. The scan
-coordinator is the only caller of `ScanApi`; screens express intent (`start`, `stop`) and read
-derived state.
+coordinator is the only caller of `ScanApi` and the connection coordinator the only caller of
+`ConnectionApi`; screens express intent (`start`, `stop`, `connect`, `disconnect`) and read
+derived state. Both coordinators live above the navigator (ADR 0005), so scanning and links
+survive screen changes.
 
 ## Composition root
 
@@ -56,14 +59,15 @@ settles it.
 `ConnectionApi` and `GattApi`. Each milestone ships a complete implementation of one segment in
 TypeScript, Swift and Kotlin, rather than stubbing unimplemented methods with fake successes.
 `BleClient` (the app's type) is the intersection of the segments implemented so far: adapter,
-permission and scan after M2.
+permission, scan and connection after M3.
 
 ## State management
 
 State is separated by responsibility (PROJECT.md 5). M0 introduced the adapter reducer, M1 the
 permission reducer and readiness projection, M2 the scan reducer, device cache and in-memory
-filters; per-device connection state, sessions, UI state and persisted preferences each get
-their own module as their milestones land. There is no global store.
+filters, M3 the per-device connection reducer; sessions, UI state and persisted preferences
+each get their own module as their milestones land. There is no global store: each concern is
+a reducer behind a provider or hook, and screens compose them.
 
 ## Platform differences
 
@@ -81,6 +85,9 @@ Handled explicitly in native code and documented at the contract:
 - Manufacturer data: iOS hands over the raw bytes, Android splits them by company id;
   `ScanResultMapper` re-serializes the Android form with the little-endian company id so both
   platforms produce the same hex string.
+- Connection timeouts: CoreBluetooth never times out, Android does after ~30 s with status 133.
+  JavaScript owns one 15 s timeout for both (ADR 0005). Cancelling a pending attempt has no
+  guaranteed callback on either platform, so native settles cancellations itself.
 
 ## Monorepo mechanics
 
