@@ -53,8 +53,10 @@ jobs:
           java-version: 17
       - uses: android-actions/setup-android@v3
         with:
-          # Match apps/mobile/android/build.gradle (compileSdk, buildTools, ndkVersion).
-          packages: platforms;android-37 build-tools;37.0.0 ndk;27.1.12297006 cmake;3.22.1
+          # The hosted image already ships platform android-37.0 and build-tools 37.0.0
+          # (API 37 packages carry a minor version; "platforms;android-37" does not exist).
+          # Only the NDK and CMake versions React Native pins need installing.
+          packages: ndk;27.1.12297006 cmake;3.22.1
       - uses: gradle/actions/setup-gradle@v4
       - run: yarn install --frozen-lockfile
       - name: Kotlin unit tests

@@ -1,34 +1,51 @@
+# Dependabot is deliberately conservative: every PR runs the full CI including a macOS job,
+# and React Native pins several toolchain versions that must move together by hand.
 version: 2
 updates:
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 2
     groups:
       minor-and-patch:
         update-types: [minor, patch]
     ignore:
+      # Major bumps are reviewed manually (Babel, ESLint, Jest, TypeScript, zod).
+      - dependency-name: '*'
+        update-types: [version-update:semver-major]
       # React Native upgrades are done by hand with the upgrade helper, never by bot.
       - dependency-name: react-native
-        update-types: [version-update:semver-major, version-update:semver-minor]
+        update-types: [version-update:semver-minor]
       - dependency-name: react
-        update-types: [version-update:semver-major]
       - dependency-name: '@react-native/*'
-        update-types: [version-update:semver-major, version-update:semver-minor]
-      - dependency-name: '@react-native-community/*'
-        update-types: [version-update:semver-major]
+        update-types: [version-update:semver-minor]
 
   - package-ecosystem: gradle
     directory: /apps/mobile/android
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 1
+    ignore:
+      # The Gradle wrapper and Kotlin/AGP versions are set by the React Native template.
+      - dependency-name: gradle-wrapper
+      - dependency-name: org.jetbrains.kotlin:*
+      - dependency-name: com.android.tools.build:gradle
 
   - package-ecosystem: bundler
     directory: /apps/mobile
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 1
+    ignore:
+      # The React Native Gemfile constrains these for CocoaPods compatibility.
+      - dependency-name: cocoapods
+      - dependency-name: xcodeproj
+      - dependency-name: activesupport
+      - dependency-name: concurrent-ruby
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 2
