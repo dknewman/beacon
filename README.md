@@ -1,5 +1,7 @@
 # Beacon
 
+[![CI](https://github.com/dknewman/beacon/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/dknewman/beacon/actions/workflows/ci.yml)
+
 Cross platform Bluetooth Low Energy device manager and developer utility for iOS and Android.
 
 React Native and TypeScript drive the application layer. Bluetooth itself lives in native code:
@@ -119,20 +121,24 @@ changes.
 
 ## Tech Stack
 
-| Layer      | Choice                                                                           |
-| ---------- | -------------------------------------------------------------------------------- |
-| App        | React Native 0.87 (New Architecture), React 19, TypeScript 6                     |
-| Bridge     | Turbo Native Module with codegen, typed event emitters                           |
-| Validation | zod 4                                                                            |
-| iOS        | Swift 5, CoreBluetooth, minimum iOS 15.1                                         |
-| Android    | Kotlin 2.2, Android BLE APIs, minSdk 24, target 36                               |
-| Tooling    | yarn 1 workspaces, ESLint 9, Prettier 3, Jest 29, RNTL 14                        |
-| CI         | GitHub Actions: typecheck, lint, tests, Android build + tests, iOS build + tests |
+| Layer      | Choice                                                                                                           |
+| ---------- | ---------------------------------------------------------------------------------------------------------------- |
+| App        | React Native 0.87 (New Architecture), React 19, TypeScript 6                                                     |
+| Bridge     | Turbo Native Module with codegen, typed event emitters                                                           |
+| Validation | zod 4                                                                                                            |
+| iOS        | Swift 5, CoreBluetooth, minimum iOS 15.1                                                                         |
+| Android    | Kotlin 2.2, Android BLE APIs, minSdk 24, target 36                                                               |
+| Tooling    | yarn 1 workspaces, ESLint 9, Prettier 3, Jest 29, RNTL 14                                                        |
+| CI         | GitHub Actions on every PR: typecheck, lint, tests, Android build + JUnit, iOS build + XCTest; Dependabot weekly |
 
 ## Running Locally
 
 Requirements: Node 22.11+, yarn 1.22, Xcode 16+ with CocoaPods (iOS), Android Studio with SDK 37,
 NDK 27 and JDK 17+ (Android).
+
+Lockfiles are part of the build contract: `yarn.lock` and `apps/mobile/Gemfile.lock` are
+committed, and `apps/mobile/ios/Podfile.lock` must be committed after the first successful
+`pod install` so CI and every machine resolve the same pods.
 
 ```sh
 yarn install
@@ -175,11 +181,11 @@ beacon/
 
 ## Milestone status
 
-| Milestone                          | Status                                           | Notes                                                                                                                                                                                                                                                                                                                                                                                           |
-| ---------------------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| M0 Foundation                      | Implemented, native builds **not yet validated** | Typecheck, lint, Jest (74 tests) pass locally. Kotlin sources compile and JUnit tests pass against the real `react-android` 0.87.1 and Android 14 framework classes on the JVM. The full Android Gradle build, the iOS build, and XCTest have **not** been run: the development container has no Android SDK or Xcode. CI is configured to run them. No hardware validation has been performed. |
-| M1 Bluetooth state and permissions | Not started                                      | Adapter state API and settings guidance exist in M0; permission abstraction is pending.                                                                                                                                                                                                                                                                                                         |
-| M2 and later                       | Not started                                      |                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Milestone                          | Status                                            | Notes                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M0 Foundation                      | Implemented, CI green, **no hardware validation** | Typecheck, lint and Jest (74 tests) pass. CI builds the debug APK and runs the Kotlin JUnit tests; CI builds the iOS app and runs the Swift XCTests on a simulator, which launches the host app. Neither app has been launched interactively or on a physical device, so "iOS app launches" and "Android app launches" in the M0 gate remain unverified by a person. |
+| M1 Bluetooth state and permissions | Not started                                       | Adapter state API and settings guidance exist in M0; permission abstraction is pending.                                                                                                                                                                                                                                                                              |
+| M2 and later                       | Not started                                       |                                                                                                                                                                                                                                                                                                                                                                      |
 
 ## Roadmap
 

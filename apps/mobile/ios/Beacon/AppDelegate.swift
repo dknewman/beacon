@@ -7,8 +7,10 @@ import ReactAppDependencyProvider
 class AppDelegate: UIResponder, UIApplicationDelegate {
   var window: UIWindow?
 
-  var reactNativeDelegate: ReactNativeDelegate?
-  var reactNativeFactory: RCTReactNativeFactory?
+  // Private so the React app-delegate types stay out of the generated Beacon-Swift.h header,
+  // which the Objective-C++ Turbo Module shim imports.
+  private var reactNativeDelegate: ReactNativeDelegate?
+  private var reactNativeFactory: RCTReactNativeFactory?
 
   func application(
     _ application: UIApplication,
@@ -33,7 +35,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
   }
 }
 
-class ReactNativeDelegate: RCTDefaultReactNativeFactoryDelegate {
+private class ReactNativeDelegate: RCTDefaultReactNativeFactoryDelegate {
   override func sourceURL(for bridge: RCTBridge) -> URL? {
     self.bundleURL()
   }

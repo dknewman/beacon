@@ -25,11 +25,14 @@ Generated artifacts (never committed):
 - iOS: `ios/build/generated/ios/ReactCodegen/BeaconBluetoothSpec/BeaconBluetoothSpec.h` defines
   `NativeBeaconBluetoothSpec` (protocol), `NativeBeaconBluetoothSpecBase` (event emitter base
   class) and `NativeBeaconBluetoothSpecJSI`.
-- Android: `com.facebook.fbreact.specs.NativeBeaconBluetoothSpec` (abstract class with
-  `getBluetoothState(Promise)` and `emitOnBluetoothStateChanged(ReadableMap)`).
+- Android: `com.beacon.bluetooth.spec.NativeBeaconBluetoothSpec` (abstract class with
+  `getBluetoothState(Promise)` and `emitOnBluetoothStateChanged(ReadableMap)`). The package
+  comes from `codegenConfig.android.javaPackageName`, which the Gradle plugin honors.
 
-Regenerate locally with `yarn workspace @beacon/mobile codegen`; the iOS and Android builds also
-run codegen automatically.
+The iOS and Android builds run codegen automatically. The standalone
+`react-native codegen` command also works for inspection, but note that it ignores
+`javaPackageName` for app projects and emits the Android spec under `com.facebook.fbreact.specs`;
+the Gradle build is the source of truth.
 
 ## iOS
 

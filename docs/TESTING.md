@@ -37,9 +37,18 @@ is a first class runtime option so reviewers can run Beacon without hardware.
 
 ## What CI runs
 
-See `.github/workflows/ci.yml`:
+`.github/workflows/ci.yml` runs on every pull request, on pushes to `main`, and on manual
+dispatch. Runs for the same ref cancel each other so only the latest push is built.
 
-1. `js`: install, typecheck, lint, format check, Jest with coverage.
-2. `android`: install, Gradle `testDebugUnitTest` and `assembleDebug` (runs codegen and compiles
-   the Kotlin module).
-3. `ios`: install, `pod install`, `xcodebuild build` and `xcodebuild test` on a simulator.
+1. `js` (ubuntu): install, typecheck, lint, format check, Jest with coverage artifact.
+2. `android` (ubuntu, after `js`): Android SDK 37 / NDK 27 / CMake, Gradle
+   `:app:testDebugUnitTest` then `:app:assembleDebug` for arm64 (runs codegen, compiles the
+   Kotlin module, uploads the debug APK as an artifact).
+3. `ios` (macOS, after `js`): Ruby 3.3 with the committed `Gemfile.lock`, `pod install` with a
+   CocoaPods cache, then `xcodebuild test` on the first available iPhone simulator with code
+   signing disabled. The `.xcresult` bundle is uploaded when the job fails.
+
+Branch protection on `main` requires the `js` and `android` checks; the `ios` check is added to
+the required set once it has a green history. Dependabot (`.github/dependabot.yml`) opens weekly
+grouped updates for npm, Gradle, Bundler and GitHub Actions; React Native itself is excluded
+because upgrades are done by hand with the upgrade helper.

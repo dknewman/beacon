@@ -3,7 +3,7 @@ package com.beacon.bluetooth
 import com.beacon.bluetooth.errors.rejectWith
 import com.beacon.bluetooth.errors.toBleError
 import com.beacon.bluetooth.mapping.BleAdapterState
-import com.facebook.fbreact.specs.NativeBeaconBluetoothSpec
+import com.beacon.bluetooth.spec.NativeBeaconBluetoothSpec
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext

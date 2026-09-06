@@ -17,6 +17,7 @@ public final class BluetoothManager: NSObject {
   @objc public var onStateChanged: ((String) -> Void)?
 
   private let queue = DispatchQueue(label: "com.beacon.bluetooth.central", qos: .userInitiated)
+  private lazy var centralDelegate = CentralDelegateProxy(owner: self)
   private var central: CBCentralManager?
   private var hasReceivedInitialState = false
   private var pendingStateRequests: [(String) -> Void] = []
@@ -64,7 +65,7 @@ public final class BluetoothManager: NSObject {
       return central
     }
     let created = CBCentralManager(
-      delegate: self,
+      delegate: centralDelegate,
       queue: queue,
       options: [CBCentralManagerOptionShowPowerAlertKey: false]
     )
@@ -80,14 +81,30 @@ public final class BluetoothManager: NSObject {
     pendingStateRequests.removeAll()
     requests.forEach { $0(state.rawValue) }
   }
-}
 
-extension BluetoothManager: CBCentralManagerDelegate {
-  public func centralManagerDidUpdateState(_ central: CBCentralManager) {
+  fileprivate func handleCentralStateUpdate(_ central: CBCentralManager) {
     guard !isInvalidated else { return }
     let state = BluetoothStateMapper.map(central.state)
     hasReceivedInitialState = true
     flushPendingRequests(with: state, onlyIfStillWaiting: false)
     onStateChanged?(state.rawValue)
+  }
+}
+
+/// Receives CoreBluetooth delegate callbacks on behalf of `BluetoothManager`.
+///
+/// Kept as a private class rather than an extension on the manager so that the
+/// Objective-C-visible surface of `BluetoothManager` (and therefore the generated
+/// `Beacon-Swift.h`) does not reference CoreBluetooth protocols. Objective-C++ importers of
+/// that header would otherwise have to import CoreBluetooth themselves.
+private final class CentralDelegateProxy: NSObject, CBCentralManagerDelegate {
+  private unowned let owner: BluetoothManager
+
+  init(owner: BluetoothManager) {
+    self.owner = owner
+  }
+
+  func centralManagerDidUpdateState(_ central: CBCentralManager) {
+    owner.handleCentralStateUpdate(central)
   }
 }
