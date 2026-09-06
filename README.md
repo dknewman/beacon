@@ -9,8 +9,8 @@ Swift and CoreBluetooth on iOS, Kotlin and the Android Bluetooth LE APIs on Andr
 through a narrow, codegen-typed Turbo Module whose every payload is validated at runtime before
 it reaches application state.
 
-> Status: **Milestone M0 (Foundation)** is implemented. See [Milestone status](#milestone-status)
-> for exactly what has and has not been validated.
+> Status: **M0 (Foundation)** and **M1 (Bluetooth state and permissions)** are implemented. See
+> [Milestone status](#milestone-status) for exactly what has and has not been validated.
 
 ## What It Is
 
@@ -60,9 +60,12 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
 
 - The only bridge surface is `apps/mobile/src/native/specs/NativeBeaconBluetooth.ts`, a codegen
   spec using primitives, plain objects, promises and typed event emitters.
-- `createNativeBluetoothAdapterClient` wraps the raw module, validates every value with zod
-  schemas from `@beacon/validation`, converts rejections to `BleError`, and folds native events
-  into the `NativeBleEvent` discriminated union.
+- `createNativeBleClient` wraps the raw module, validates every value with zod schemas from
+  `@beacon/validation`, converts rejections to `BleError`, and folds native events into the
+  `NativeBleEvent` discriminated union.
+- Permission is part of the contract (`PermissionApi`): the UI derives one "readiness" state
+  from adapter state and permission together and shows a single next action (ask, open
+  settings, retry). See [docs/PERMISSIONS.md](docs/PERMISSIONS.md).
 - Native state is authoritative. JavaScript mirrors it through validated events and never infers
   adapter or connection state from local booleans.
 
@@ -70,10 +73,12 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
 
 `apps/mobile/ios/BeaconBluetooth/`
 
-- `BluetoothManager.swift` owns `CBCentralManager` on a private serial queue, defers creation
-  until JavaScript first asks (creation triggers the permission prompt), and guarantees that a
-  state request always settles even before CoreBluetooth's first delegate callback.
-- `Mapping/BluetoothStateMapper.swift` and `Errors/BleError.swift` are pure and covered by XCTest.
+- `BluetoothManager.swift` owns `CBCentralManager` on a private serial queue. Because creating
+  the central triggers the system permission prompt, it is only created once authorization is
+  granted or inside an explicit `requestPermission()`; app launch never prompts. A state request
+  always settles even before CoreBluetooth's first delegate callback.
+- `Mapping/BluetoothStateMapper.swift`, `Mapping/AuthorizationMapper.swift` and
+  `Errors/BleError.swift` are pure and covered by XCTest.
 - `BeaconBluetoothModule.mm` is a thin Objective-C++ class conforming to the generated spec and
   forwarding to Swift. It contains no Bluetooth logic.
 
@@ -83,7 +88,11 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
 
 - `BluetoothController.kt` owns `BluetoothManager`/`BluetoothAdapter`, reports "unsupported" on
   devices without a BLE radio, and observes `ACTION_STATE_CHANGED` broadcasts.
-- `mapping/BluetoothStateMapper.kt` and `errors/BleError.kt` are pure and covered by JUnit.
+- `permissions/PermissionController.kt` requests only what the running API level needs
+  (`BLUETOOTH_SCAN` + `BLUETOOTH_CONNECT` on 31+, fine location below) and tells "denied" from
+  "blocked" using the rationale flag plus a persisted "asked before" bit.
+- `mapping/BluetoothStateMapper.kt`, `permissions/PermissionStateMapper.kt`,
+  `permissions/RequiredPermissions.kt` and `errors/BleError.kt` are pure and covered by JUnit.
 - `BeaconBluetoothModule.kt` extends the generated `NativeBeaconBluetoothSpec`, starts and stops
   the controller with the module lifecycle, and emits typed events.
 
@@ -116,8 +125,7 @@ See [docs/TESTING.md](docs/TESTING.md) for the strategy and the mock layer plan.
 
 Planned for M10 (`MockBleClient` with heart rate, battery and weight scale peripherals and
 failure scenarios). Today the app's composition root already injects the client through
-context, and tests use `FakeBluetoothAdapterClient`, so swapping in the mock requires no UI
-changes.
+context, and tests use `FakeBleClient`, so swapping in the mock requires no UI changes.
 
 ## Tech Stack
 
@@ -181,11 +189,11 @@ beacon/
 
 ## Milestone status
 
-| Milestone                          | Status                                            | Notes                                                                                                                                                                                                                                                                                                                                                                |
-| ---------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| M0 Foundation                      | Implemented, CI green, **no hardware validation** | Typecheck, lint and Jest (74 tests) pass. CI builds the debug APK and runs the Kotlin JUnit tests; CI builds the iOS app and runs the Swift XCTests on a simulator, which launches the host app. Neither app has been launched interactively or on a physical device, so "iOS app launches" and "Android app launches" in the M0 gate remain unverified by a person. |
-| M1 Bluetooth state and permissions | Not started                                       | Adapter state API and settings guidance exist in M0; permission abstraction is pending.                                                                                                                                                                                                                                                                              |
-| M2 and later                       | Not started                                       |                                                                                                                                                                                                                                                                                                                                                                      |
+| Milestone                          | Status                                            | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M0 Foundation                      | Implemented, CI green, **no hardware validation** | Typecheck, lint and Jest (74 tests) pass. CI builds the debug APK and runs the Kotlin JUnit tests; CI builds the iOS app and runs the Swift XCTests on a simulator, which launches the host app. Neither app has been launched interactively or on a physical device, so "iOS app launches" and "Android app launches" in the M0 gate remain unverified by a person.                                                                                                    |
+| M1 Bluetooth state and permissions | Implemented, **no hardware validation**           | `PermissionApi` on the bridge; iOS authorization mapping with the prompt deferred to an explicit user action; Android runtime requests scoped by API level with denied/blocked distinction; permission state machine, readiness derivation and settings guidance in the UI; Jest, XCTest and JUnit coverage. The M1 gate states (powered on, off, unauthorized, unsupported) are exercised by tests and CI builds only; none has been observed on a device by a person. |
+| M2 and later                       | Not started                                       |                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 ## Roadmap
 
