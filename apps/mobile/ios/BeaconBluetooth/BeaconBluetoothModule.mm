@@ -124,6 +124,21 @@
               }];
 }
 
+- (void)discoverServices:(NSString *)deviceId
+                 resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject
+{
+  [self.manager discoverServices:deviceId
+                      completion:^(NSArray<NSDictionary<NSString *, id> *> *services,
+                                   NSDictionary<NSString *, id> *error) {
+                        if (error != nil) {
+                          [BeaconBluetoothModule settle:error resolve:resolve reject:reject];
+                        } else {
+                          resolve(services);
+                        }
+                      }];
+}
+
 /// Resolves a void promise, or rejects it with the contract `code` and message from a
 /// `BleError.payload` dictionary so JavaScript's `toBleError` can read the code.
 + (void)settle:(NSDictionary<NSString *, id> *)error
