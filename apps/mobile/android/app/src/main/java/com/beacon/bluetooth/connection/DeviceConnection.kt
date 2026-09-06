@@ -9,7 +9,9 @@ import com.beacon.bluetooth.errors.BleError
 import com.beacon.bluetooth.errors.BleErrorCode
 import com.beacon.bluetooth.errors.toBleError
 import com.beacon.bluetooth.mapping.BleConnectionState
+import com.beacon.bluetooth.mapping.DiscoveredService
 import com.beacon.bluetooth.mapping.GattStatusMapper
+import com.beacon.bluetooth.mapping.GattTreeMapper
 
 /**
  * One peripheral's connection (PROJECT.md 28, 29): owns the `BluetoothGatt`, drives the
@@ -35,6 +37,10 @@ class DeviceConnection(
     val address: String = device.address
 
     var state: BleConnectionState = BleConnectionState.DISCONNECTED
+        private set
+
+    /** The GATT table, available while the connection is READY. */
+    var services: List<DiscoveredService> = emptyList()
         private set
 
     private var gatt: BluetoothGatt? = null
@@ -126,6 +132,16 @@ class DeviceConnection(
         }
     }
 
+    /** The discovered table; fails with `disconnected` unless the connection is READY. */
+    @Synchronized
+    fun discoverServices(onResult: (Result<List<DiscoveredService>>) -> Unit) {
+        if (state != BleConnectionState.READY) {
+            onResult(Result.failure(BleError(BleErrorCode.DISCONNECTED, "Not connected to $address")))
+            return
+        }
+        onResult(Result.success(services))
+    }
+
     /** Tears the connection down without waiting, for adapter loss and module invalidation. */
     @Synchronized
     fun drop(reason: BleError?) {
@@ -158,6 +174,7 @@ class DeviceConnection(
         }
         settleRssi(Result.failure(BleError(BleErrorCode.DISCONNECTED, "The connection ended")))
         disconnectRequested = false
+        services = emptyList()
         setState(BleConnectionState.DISCONNECTED)
         val waiters = pendingDisconnects.toList()
         pendingDisconnects.clear()
@@ -235,6 +252,7 @@ class DeviceConnection(
                 if (gatt !== this@DeviceConnection.gatt) return
                 if (state != BleConnectionState.DISCOVERING_SERVICES) return
                 if (status == BluetoothGatt.GATT_SUCCESS) {
+                    services = GattTreeMapper.services(gatt.services ?: emptyList())
                     setState(BleConnectionState.READY)
                     settleConnects(null)
                     return

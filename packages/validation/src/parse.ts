@@ -3,11 +3,13 @@ import {
   type BleErrorCode,
   type BlePermissionState,
   type BluetoothState,
+  type GattService,
   type NativeBleEvent,
 } from '@beacon/ble-contracts';
 import type { z } from 'zod';
 import { fail, ok, type ValidationResult } from './result';
 import { bluetoothStateSchema } from './schemas/bluetooth-state';
+import { gattServiceListSchema } from './schemas/gatt';
 import { rssiSchema } from './schemas/primitives';
 import { nativeBleEventSchema } from './schemas/native-events';
 import { blePermissionStateSchema } from './schemas/permissions';
@@ -59,4 +61,10 @@ export function parseNativeBleEvent(
 
 export function parseRssi(input: unknown): ValidationResult<number, BleError> {
   return validate(rssiSchema, input, 'Invalid RSSI from native');
+}
+
+export function parseGattServices(
+  input: unknown,
+): ValidationResult<GattService[], BleError> {
+  return validate(gattServiceListSchema, input, 'Invalid GATT services from native');
 }

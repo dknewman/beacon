@@ -1,5 +1,6 @@
 import type {
   BlePermissionState,
+  GattService,
   BluetoothState,
   NativeBleEvent,
   ScanOptions,
@@ -21,6 +22,7 @@ interface PendingCalls {
   connect: Deferred<void>[];
   disconnect: Deferred<void>[];
   readRssi: Deferred<number>[];
+  discoverServices: Deferred<GattService[]>[];
 }
 
 /**
@@ -40,6 +42,7 @@ export class FakeBleClient implements BleClient {
     connect: [],
     disconnect: [],
     readRssi: [],
+    discoverServices: [],
   };
 
   getBluetoothStateCalls = 0;
@@ -50,6 +53,7 @@ export class FakeBleClient implements BleClient {
   connectCalls: string[] = [];
   disconnectCalls: string[] = [];
   readRssiCalls: string[] = [];
+  discoverServicesCalls: string[] = [];
 
   getBluetoothState(): Promise<BluetoothState> {
     this.getBluetoothStateCalls += 1;
@@ -89,6 +93,11 @@ export class FakeBleClient implements BleClient {
   readRssi(deviceId: string): Promise<number> {
     this.readRssiCalls.push(deviceId);
     return this.defer('readRssi');
+  }
+
+  discoverServices(deviceId: string): Promise<GattService[]> {
+    this.discoverServicesCalls.push(deviceId);
+    return this.defer('discoverServices');
   }
 
   subscribe(listener: (event: NativeBleEvent) => void): Unsubscribe {
@@ -164,6 +173,14 @@ export class FakeBleClient implements BleClient {
 
   rejectRssi(error: unknown): void {
     this.take('readRssi').forEach(d => d.reject(error));
+  }
+
+  resolveServices(services: GattService[]): void {
+    this.take('discoverServices').forEach(d => d.resolve(services));
+  }
+
+  rejectServices(error: unknown): void {
+    this.take('discoverServices').forEach(d => d.reject(error));
   }
 
   /** Emits the native transition sequence for a connection that reaches `ready`. */

@@ -20,6 +20,10 @@ final class PeripheralSession {
   var pendingRssiReads: [(NSNumber?, [String: Any]?) -> Void] = []
   /// Set when JavaScript asked for the link to end, so the disconnect is reported cleanly.
   var disconnectRequested = false
+  /// The GATT table, complete once every service's characteristics have been discovered.
+  var services: [DiscoveredService] = []
+  /// Services still waiting for `didDiscoverCharacteristicsFor` during connection setup.
+  var pendingCharacteristicDiscoveries = 0
 
   private let delegateProxy = PeripheralDelegateProxy()
 
@@ -71,6 +75,7 @@ final class PeripheralSession {
 /// The subset of `BluetoothManager` a session's delegate proxy calls back into.
 protocol PeripheralSessionOwner: AnyObject {
   func session(_ session: PeripheralSession, didDiscoverServices error: Error?)
+  func session(_ session: PeripheralSession, didDiscoverCharacteristicsFor service: CBService, error: Error?)
   func session(_ session: PeripheralSession, didReadRSSI rssi: NSNumber, error: Error?)
 }
 
@@ -83,6 +88,15 @@ private final class PeripheralDelegateProxy: NSObject, CBPeripheralDelegate {
   func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
     guard let session else { return }
     owner?.session(session, didDiscoverServices: error)
+  }
+
+  func peripheral(
+    _ peripheral: CBPeripheral,
+    didDiscoverCharacteristicsFor service: CBService,
+    error: Error?
+  ) {
+    guard let session else { return }
+    owner?.session(session, didDiscoverCharacteristicsFor: service, error: error)
   }
 
   func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {

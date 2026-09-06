@@ -79,8 +79,16 @@ export interface NotificationRequest {
   enabled: boolean;
 }
 
-export interface GattApi {
+/**
+ * Service and characteristic discovery (M4). Native discovers the whole tree
+ * while connecting, so this returns the cached table for a `ready` device and
+ * rejects with `disconnected` otherwise. UUIDs arrive in canonical form.
+ */
+export interface GattDiscoveryApi {
   discoverServices(deviceId: string): Promise<GattService[]>;
+}
+
+export interface GattApi extends GattDiscoveryApi {
   readCharacteristic(
     deviceId: string,
     serviceUuid: string,

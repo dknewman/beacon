@@ -252,6 +252,23 @@ public final class BluetoothManager: NSObject {
     }
   }
 
+  /// Returns the GATT table discovered while connecting. Completes with the service payloads,
+  /// or a `BleError.payload` (`disconnected`) when the session is not `ready`.
+  @objc public func discoverServices(
+    _ deviceId: String,
+    completion: @escaping ([[String: Any]]?, [String: Any]?) -> Void
+  ) {
+    queue.async { [self] in
+      guard let uuid = UUID(uuidString: deviceId), let session = sessions[uuid],
+        session.state == .ready
+      else {
+        completion(nil, BleError(code: .disconnected, message: "Not connected to \(deviceId)").payload)
+        return
+      }
+      completion(session.services.map(\.payload), nil)
+    }
+  }
+
   // MARK: - Lifecycle
 
   /// Releases CoreBluetooth resources. Called when the React instance is torn down.
@@ -416,6 +433,8 @@ public final class BluetoothManager: NSObject {
     }
     session.settleRssiReads(with: nil, error: BleError(code: .disconnected, message: "The connection ended").payload)
     session.disconnectRequested = false
+    session.services = []
+    session.pendingCharacteristicDiscoveries = 0
     transition(session, to: .disconnected)
     session.settleDisconnects()
   }
@@ -530,17 +549,49 @@ extension BluetoothManager: PeripheralSessionOwner {
   func session(_ session: PeripheralSession, didDiscoverServices error: Error?) {
     guard session.state == .discoveringServices else { return }
     if let error {
-      let bleError = BleError.from(error, fallback: .serviceNotFound)
-      emitError(bleError, for: session)
-      session.settleConnects(with: bleError.payload)
-      // A link without services is useless; close it cleanly (the error is already out).
-      session.disconnectRequested = true
-      transition(session, to: .disconnecting)
-      central?.cancelPeripheralConnection(session.peripheral)
+      failDiscovery(session, error: BleError.from(error, fallback: .serviceNotFound))
       return
     }
-    transition(session, to: .ready)
-    session.settleConnects(with: nil)
+    let services = session.peripheral.services ?? []
+    if services.isEmpty {
+      session.services = []
+      transition(session, to: .ready)
+      session.settleConnects(with: nil)
+      return
+    }
+    // Characteristics arrive one service at a time; the session is ready once all are in.
+    session.pendingCharacteristicDiscoveries = services.count
+    for service in services {
+      session.peripheral.discoverCharacteristics(nil, for: service)
+    }
+  }
+
+  func session(
+    _ session: PeripheralSession,
+    didDiscoverCharacteristicsFor service: CBService,
+    error: Error?
+  ) {
+    guard session.state == .discoveringServices, session.pendingCharacteristicDiscoveries > 0 else { return }
+    if let error {
+      session.pendingCharacteristicDiscoveries = 0
+      failDiscovery(session, error: BleError.from(error, fallback: .characteristicNotFound))
+      return
+    }
+    session.pendingCharacteristicDiscoveries -= 1
+    if session.pendingCharacteristicDiscoveries == 0 {
+      session.services = GattMapper.services(session.peripheral.services ?? [])
+      transition(session, to: .ready)
+      session.settleConnects(with: nil)
+    }
+  }
+
+  /// A link whose table cannot be read is useless: report the error, then close it cleanly.
+  private func failDiscovery(_ session: PeripheralSession, error: BleError) {
+    emitError(error, for: session)
+    session.settleConnects(with: error.payload)
+    session.disconnectRequested = true
+    transition(session, to: .disconnecting)
+    central?.cancelPeripheralConnection(session.peripheral)
   }
 
   func session(_ session: PeripheralSession, didReadRSSI rssi: NSNumber, error: Error?) {

@@ -21,11 +21,11 @@ Dependency direction is strictly downward in the table. `packages/*` never impor
 ## Data flow (M0–M3)
 
 ```text
-NavigationContainer ─ DeviceListScreen ──(deviceId)──► DeviceDetailScreen
-   ▲ reads                                              ▲ reads by id, polls RSSI while ready
-ScanProvider: readiness + scan coordinator + device cache   ConnectionProvider: per-device machine, timeout
-   ▲                                              ▲                    ▲
-   │ BluetoothAdapterApi / PermissionApi          │ ScanApi            │ ConnectionApi
+NavigationContainer ─ DeviceListScreen ──► DeviceDetailScreen ──► GattInspectorScreen ──► CharacteristicDetailScreen
+   ▲ reads                                 ▲ reads by id, polls RSSI      ▲ reads the cached table by id
+ScanProvider: readiness + scan + device cache   ConnectionProvider: per-device machine   GattProvider: per-device table
+   ▲                                              ▲                    ▲                     ▲
+   │ BluetoothAdapterApi / PermissionApi          │ ScanApi            │ ConnectionApi       │ GattDiscoveryApi
    │                                              │ scan.device_discovered / ble.error (no deviceId)
    │                                              │                    │ connection.state_changed / ble.error (deviceId)
 createNativeBleClient
@@ -58,15 +58,16 @@ settles it.
 `NativeBleClient` is composed from `BluetoothAdapterApi`, `PermissionApi`, `ScanApi`,
 `ConnectionApi` and `GattApi`. Each milestone ships a complete implementation of one segment in
 TypeScript, Swift and Kotlin, rather than stubbing unimplemented methods with fake successes.
+`GattApi` is itself split: `GattDiscoveryApi` (M4) and the read/write/notify methods (M5, M6).
 `BleClient` (the app's type) is the intersection of the segments implemented so far: adapter,
-permission, scan and connection after M3.
+permission, scan, connection and GATT discovery after M4.
 
 ## State management
 
 State is separated by responsibility (PROJECT.md 5). M0 introduced the adapter reducer, M1 the
 permission reducer and readiness projection, M2 the scan reducer, device cache and in-memory
-filters, M3 the per-device connection reducer; sessions, UI state and persisted preferences
-each get their own module as their milestones land. There is no global store: each concern is
+filters, M3 the per-device connection reducer, M4 the per-device GATT table tied to the link;
+sessions, UI state and persisted preferences each get their own module as their milestones land. There is no global store: each concern is
 a reducer behind a provider or hook, and screens compose them.
 
 ## Platform differences
@@ -85,6 +86,9 @@ Handled explicitly in native code and documented at the contract:
 - Manufacturer data: iOS hands over the raw bytes, Android splits them by company id;
   `ScanResultMapper` re-serializes the Android form with the little-endian company id so both
   platforms produce the same hex string.
+- Service discovery: Android hands over the complete tree in one callback; CoreBluetooth needs
+  one `discoverCharacteristics` round trip per service. Both platforms finish the whole tree
+  before reporting `ready`, so `discoverServices` is a cached read on either.
 - Connection timeouts: CoreBluetooth never times out, Android does after ~30 s with status 133.
   JavaScript owns one 15 s timeout for both (ADR 0005). Cancelling a pending attempt has no
   guaranteed callback on either platform, so native settles cancellations itself.

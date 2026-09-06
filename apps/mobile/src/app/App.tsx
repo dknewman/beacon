@@ -2,6 +2,7 @@ import React from 'react';
 import { NavigationContainer, DarkTheme, DefaultTheme } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ConnectionProvider } from '../features/connection/ConnectionProvider';
+import { GattProvider } from '../features/gatt/GattProvider';
 import { ScanProvider } from '../features/scan/ScanProvider';
 import type { BleClient } from '../native/BleClient';
 import { BleClientProvider } from '../native/BleClientContext';
@@ -22,7 +23,9 @@ export function App({ bleClient }: AppProps): React.JSX.Element {
       <BleClientProvider client={bleClient}>
         <ScanProvider>
           <ConnectionProvider>
-            <ThemedNavigation />
+            <GattProvider>
+              <ThemedNavigation />
+            </GattProvider>
           </ConnectionProvider>
         </ScanProvider>
       </BleClientProvider>
