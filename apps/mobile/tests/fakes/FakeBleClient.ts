@@ -2,6 +2,7 @@ import type {
   BlePermissionState,
   BluetoothState,
   NativeBleEvent,
+  ScanOptions,
   Unsubscribe,
 } from '@beacon/ble-contracts';
 import type { BleClient } from '../../src/native/BleClient';
@@ -11,41 +12,59 @@ interface Deferred<T> {
   reject: (error: unknown) => void;
 }
 
+interface PendingCalls {
+  bluetoothState: Deferred<BluetoothState>[];
+  permissionState: Deferred<BlePermissionState>[];
+  permissionRequest: Deferred<BlePermissionState>[];
+  startScan: Deferred<void>[];
+  stopScan: Deferred<void>[];
+}
+
 /**
  * Deterministic in-memory stand-in for the native bridge, used by component
  * and integration tests. Every native call stays pending until the test
  * resolves or rejects it, so ordering and in-flight states can be asserted.
- * The full MockBleClient (scanning, GATT, failure scenarios) arrives in M10.
+ * The scripted MockBleClient (src/mock) is the runtime alternative.
  */
 export class FakeBleClient implements BleClient {
   private readonly listeners = new Set<(event: NativeBleEvent) => void>();
-  private pendingBluetoothState: Deferred<BluetoothState>[] = [];
-  private pendingPermissionState: Deferred<BlePermissionState>[] = [];
-  private pendingPermissionRequest: Deferred<BlePermissionState>[] = [];
+  private readonly pending: PendingCalls = {
+    bluetoothState: [],
+    permissionState: [],
+    permissionRequest: [],
+    startScan: [],
+    stopScan: [],
+  };
 
   getBluetoothStateCalls = 0;
   getPermissionStateCalls = 0;
   requestPermissionCalls = 0;
+  startScanCalls: ScanOptions[] = [];
+  stopScanCalls = 0;
 
   getBluetoothState(): Promise<BluetoothState> {
     this.getBluetoothStateCalls += 1;
-    return new Promise((resolve, reject) => {
-      this.pendingBluetoothState.push({ resolve, reject });
-    });
+    return this.defer('bluetoothState');
   }
 
   getPermissionState(): Promise<BlePermissionState> {
     this.getPermissionStateCalls += 1;
-    return new Promise((resolve, reject) => {
-      this.pendingPermissionState.push({ resolve, reject });
-    });
+    return this.defer('permissionState');
   }
 
   requestPermission(): Promise<BlePermissionState> {
     this.requestPermissionCalls += 1;
-    return new Promise((resolve, reject) => {
-      this.pendingPermissionRequest.push({ resolve, reject });
-    });
+    return this.defer('permissionRequest');
+  }
+
+  startScan(options: ScanOptions = {}): Promise<void> {
+    this.startScanCalls.push(options);
+    return this.defer('startScan');
+  }
+
+  stopScan(): Promise<void> {
+    this.stopScanCalls += 1;
+    return this.defer('stopScan');
   }
 
   subscribe(listener: (event: NativeBleEvent) => void): Unsubscribe {
@@ -60,55 +79,63 @@ export class FakeBleClient implements BleClient {
   }
 
   resolveBluetoothState(state: BluetoothState): void {
-    settle(this.takeBluetoothState(), d => d.resolve(state));
+    this.take('bluetoothState').forEach(d => d.resolve(state));
   }
 
   rejectBluetoothState(error: unknown): void {
-    settle(this.takeBluetoothState(), d => d.reject(error));
+    this.take('bluetoothState').forEach(d => d.reject(error));
   }
 
   resolvePermissionState(state: BlePermissionState): void {
-    settle(this.takePermissionState(), d => d.resolve(state));
+    this.take('permissionState').forEach(d => d.resolve(state));
   }
 
   rejectPermissionState(error: unknown): void {
-    settle(this.takePermissionState(), d => d.reject(error));
+    this.take('permissionState').forEach(d => d.reject(error));
   }
 
   resolvePermissionRequest(state: BlePermissionState): void {
-    settle(this.takePermissionRequest(), d => d.resolve(state));
+    this.take('permissionRequest').forEach(d => d.resolve(state));
   }
 
   rejectPermissionRequest(error: unknown): void {
-    settle(this.takePermissionRequest(), d => d.reject(error));
+    this.take('permissionRequest').forEach(d => d.reject(error));
+  }
+
+  resolveStartScan(): void {
+    this.take('startScan').forEach(d => d.resolve());
+  }
+
+  rejectStartScan(error: unknown): void {
+    this.take('startScan').forEach(d => d.reject(error));
+  }
+
+  resolveStopScan(): void {
+    this.take('stopScan').forEach(d => d.resolve());
+  }
+
+  rejectStopScan(error: unknown): void {
+    this.take('stopScan').forEach(d => d.reject(error));
   }
 
   emit(event: NativeBleEvent): void {
     this.listeners.forEach(listener => listener(event));
   }
 
-  private takeBluetoothState(): Deferred<BluetoothState>[] {
-    const pending = this.pendingBluetoothState;
-    this.pendingBluetoothState = [];
-    return pending;
+  private defer<K extends keyof PendingCalls>(
+    key: K,
+  ): Promise<PendingCalls[K][number] extends Deferred<infer T> ? T : never> {
+    return new Promise((resolve, reject) => {
+      (this.pending[key] as Deferred<unknown>[]).push({
+        resolve: resolve as (value: unknown) => void,
+        reject,
+      });
+    });
   }
 
-  private takePermissionState(): Deferred<BlePermissionState>[] {
-    const pending = this.pendingPermissionState;
-    this.pendingPermissionState = [];
+  private take<K extends keyof PendingCalls>(key: K): PendingCalls[K] {
+    const pending = this.pending[key];
+    this.pending[key] = [] as unknown as PendingCalls[K];
     return pending;
   }
-
-  private takePermissionRequest(): Deferred<BlePermissionState>[] {
-    const pending = this.pendingPermissionRequest;
-    this.pendingPermissionRequest = [];
-    return pending;
-  }
-}
-
-function settle<T>(
-  deferreds: Deferred<T>[],
-  apply: (deferred: Deferred<T>) => void,
-): void {
-  deferreds.forEach(apply);
 }

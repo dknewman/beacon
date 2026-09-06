@@ -36,6 +36,7 @@ ensure_file(ble_group, 'BeaconBluetoothModule.h')
   [ble_group, 'BluetoothManager.swift'],
   [mapping_group, 'BluetoothStateMapper.swift'],
   [mapping_group, 'AuthorizationMapper.swift'],
+  [mapping_group, 'AdvertisementMapper.swift'],
   [errors_group, 'BleError.swift'],
 ].each do |group, file|
   ensure_source(app_target, ensure_file(group, file))
@@ -73,7 +74,10 @@ test_target.build_configurations.each do |config|
 end
 
 tests_group = ensure_group(project.main_group, 'BeaconBluetoothTests', 'BeaconBluetoothTests')
-%w[BluetoothStateMapperTests.swift BleErrorTests.swift AuthorizationMapperTests.swift].each do |file|
+%w[
+  BluetoothStateMapperTests.swift BleErrorTests.swift AuthorizationMapperTests.swift
+  AdvertisementMapperTests.swift
+].each do |file|
   ensure_source(test_target, ensure_file(tests_group, file))
 end
 
