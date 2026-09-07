@@ -258,6 +258,72 @@ before the `disconnected` transition, so the connection machine records `lastErr
 the late rejection finds its entry already removed and is ignored. Reconnecting starts from
 `off`, as native does.
 
+## Session recording (`RecorderState`) — M8
+
+```text
+idle ──start_requested──► starting ──start_succeeded { session }──► recording ──stop_requested──► stopping ──stop_succeeded { endedAt }──► idle (lastSession)
+starting ──start_failed──► idle (lastError)
+stopping ──stop_failed──► idle (lastSession, lastError)
+recording|stopping ──events_appended { sessionId, eventCount, packetCount }──► same phase (counts added)
+recording|stopping ──append_failed { sessionId, droppedCount, error }──► same phase (droppedCount added; lastError while recording)
+any ──sessions_changed──► every device unchanged, revision + 1
+```
+
+One `DeviceRecording` per device (`recordingOf` answers `idle` for a device with no entry),
+holding the phase, the open `session` while `recording` or `stopping`, and three counts:
+`eventCount` and `packetCount` are what the repository has acknowledged, `droppedCount` is
+what a failed append lost. `start_requested` is ignored unless the device is `idle`,
+`stop_requested` unless it is `recording`, and every acknowledgement is ignored unless the
+device is in the phase that asked for it and the `sessionId` matches, so a late result for a
+session that already ended cannot touch the next one. `stop_succeeded` and `stop_failed`
+both return to `idle` with `lastSession` carrying the acknowledged counts; a failed stop also
+keeps `lastError`, and the row stays open until the next launch closes it (below). The
+state's `revision` bumps on `start_succeeded`, `stop_succeeded` and `sessions_changed`
+(recovery closed a session, or a screen deleted one) so the history list refetches without
+polling. Implemented in `features/sessions/sessionRecorderReducer.ts`; driven by
+`SessionRecorderProvider` (ADR 0009).
+
+A session is explicit: it starts and ends with Start and Stop on the Device Detail screen,
+not with the link. A device that drops and reconnects while recording produces `connection`
+events inside one session. Two devices record independently.
+
+### Activity bus and the write path
+
+```text
+coordinator ──publish { deviceId, ...SessionEventInput }──► ActivityBus (synchronous fan-out, no history)
+                                                              │ SessionRecorderProvider, while starting | recording
+                                                              ▼
+                                                     per-device ref buffer (no React state)
+                                                              │ flushed every 250 ms, or at once at 200 events
+                                                              ▼
+                                            repository.appendEvents(sessionId, batch)   one transaction, serialized per device
+                                                     ├─ resolved ──► events_appended
+                                                     └─ rejected ──► append_failed (batch dropped, session still open)
+```
+
+`ConnectionProvider` publishes every `connection` transition, every device-scoped `error`
+(native ones and the ones JavaScript raises, such as the 15 s connect timeout) and every
+`rssi` reading; `GattProvider` publishes `services_discovered`; `SubscriptionProvider`
+publishes `subscription` on the peripheral's acknowledgement and one `notification` per value
+at its 100 ms flush, with the native timestamp; `useCharacteristicOperations` publishes a
+successful `read` and `write`. Failed reads, writes and subscription changes are not
+published; they stay in the operation outcome and the subscription entry as before.
+
+The recorder captures from `start_requested`, so events published while the session row is
+being created wait in the buffer and are appended, in order, once the id exists; while
+`idle` or `stopping` the buffer is dropped. Appends for one device run one after another,
+so sequence numbers follow the order of publication even when a slow write overlaps the next
+flush. `stop_requested` flushes what is buffered before `endSession` is called, so nothing
+published before the tap is lost.
+
+### Recovery and the connection machine
+
+Recording does not watch the connection machine: a link leaving `ready` is a `connection`
+event in the timeline, not the end of the session. What ends a session other than Stop is
+the next launch: `recoverOpenSessions` runs when the recorder mounts and ends every session
+without `endedAt` at its newest event, or at its start when it holds none, then dispatches
+`sessions_changed`. Every machine above is unchanged by M8; the recorder only listens.
+
 ## Events
 
 `NativeBleEvent` is a discriminated union on `type`:

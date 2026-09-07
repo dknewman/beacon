@@ -10,5 +10,6 @@
 | [0006](0006-gatt-operation-queue-and-packet-log.md)         | Native GATT operation queue; bounded packet log           | Accepted |
 | [0007](0007-buffered-notification-pipeline.md)              | Buffered notification pipeline; subscriptions from acks   | Accepted |
 | [0008](0008-parser-registry.md)                             | Parser package; ordered registry with raw fallback        | Accepted |
+| [0009](0009-session-persistence.md)                         | Sessions in SQLite behind a repository; activity bus      | Accepted |
 
-Planned: session persistence (M8).
+Planned: export (M9).
