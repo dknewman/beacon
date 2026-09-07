@@ -25,8 +25,8 @@ final class PeripheralSession {
   /// Services still waiting for `didDiscoverCharacteristicsFor` during connection setup.
   var pendingCharacteristicDiscoveries = 0
 
-  /// Serializes reads and writes so CoreBluetooth is never asked for a second value before it
-  /// has answered the first (PROJECT.md 29). Fed through `enqueue`, drained by the manager's
+  /// Serializes reads, writes and subscription changes so CoreBluetooth never has two of them
+  /// in flight at once (PROJECT.md 29). Fed through `enqueue`, drained by the manager's
   /// delegate handlers calling `operations.finish()`.
   let operations = GattOperationQueue()
   /// The read CoreBluetooth is answering: set by its operation's `start`, cleared by
@@ -35,9 +35,18 @@ final class PeripheralSession {
   var pendingRead: (characteristic: CBCharacteristic, completion: ([NSNumber]?, [String: Any]?) -> Void)?
   /// The write-with-response CoreBluetooth is acknowledging; same lifecycle as `pendingRead`.
   var pendingWrite: (characteristic: CBCharacteristic, completion: ([String: Any]?) -> Void)?
+  /// The subscription change CoreBluetooth is acknowledging through
+  /// `didUpdateNotificationStateFor`; same lifecycle as `pendingRead`.
+  var pendingNotify: (characteristic: CBCharacteristic, completion: ([String: Any]?) -> Void)?
+  /// Characteristics CoreBluetooth currently pushes values for, as
+  /// `CharacteristicValueMapper.subscriptionKey` strings. Maintained from the peripheral's own
+  /// `isNotifying` answers rather than from what was asked, so it stays authoritative; emptied
+  /// when the link ends because CoreBluetooth drops every subscription with it.
+  var subscribedCharacteristics: Set<String> = []
   /// How to fail each operation still waiting in `operations`. An entry is removed the moment
-  /// its operation starts (the completion then lives in `pendingRead` or `pendingWrite`), so
-  /// whatever remains when the link ends is exactly the set of never-started operations.
+  /// its operation starts (the completion then lives in `pendingRead`, `pendingWrite` or
+  /// `pendingNotify`), so whatever remains when the link ends is exactly the set of
+  /// never-started operations.
   private var queuedSettlers: [(token: UUID, settle: (BleError) -> Void)] = []
 
   private let delegateProxy = PeripheralDelegateProxy()
@@ -88,10 +97,10 @@ final class PeripheralSession {
 
   // MARK: - GATT operations
 
-  /// Queues a read or write. When its turn comes, `start` performs the platform call and
-  /// returns whether a delegate callback is now awaited; `cancel` settles the completion if
-  /// the link ends before that. `start` receives the session as an argument so the closure
-  /// does not have to capture it, which keeps the queue from retaining its owner.
+  /// Queues a read, write or subscription change. When its turn comes, `start` performs the
+  /// platform call and returns whether a delegate callback is now awaited; `cancel` settles the
+  /// completion if the link ends before that. `start` receives the session as an argument so
+  /// the closure does not have to capture it, which keeps the queue from retaining its owner.
   func enqueue(
     label: String,
     cancel: @escaping (BleError) -> Void,
@@ -107,18 +116,37 @@ final class PeripheralSession {
   }
 
   /// Fails the in-flight operation and every queued one, e.g. when the link ends. Settles in
-  /// queue order: the in-flight read or write first, then the operations that never started.
+  /// queue order: the in-flight operation first, then the operations that never started.
   func cancelOperations(with error: BleError) {
     _ = operations.cancelAll()
     let read = pendingRead
     let write = pendingWrite
+    let notify = pendingNotify
     let queued = queuedSettlers
     pendingRead = nil
     pendingWrite = nil
+    pendingNotify = nil
     queuedSettlers.removeAll()
     read?.completion(nil, error.payload)
     write?.completion(error.payload)
+    notify?.completion(error.payload)
     queued.forEach { $0.settle(error) }
+  }
+
+  /// Records the peripheral's answer to a subscription change. Keyed by canonical UUIDs so one
+  /// characteristic cannot be counted twice under two spellings. A characteristic whose service
+  /// back-reference is gone belongs to an invalidated table and is not tracked.
+  func setSubscribed(_ subscribed: Bool, for characteristic: CBCharacteristic) {
+    guard let service = characteristic.service else { return }
+    let key = CharacteristicValueMapper.subscriptionKey(
+      serviceUuid: service.uuid,
+      characteristicUuid: characteristic.uuid
+    )
+    if subscribed {
+      subscribedCharacteristics.insert(key)
+    } else {
+      subscribedCharacteristics.remove(key)
+    }
   }
 
   /// Finds a discovered characteristic by UUID strings in any accepted form (short or full,
@@ -147,6 +175,7 @@ protocol PeripheralSessionOwner: AnyObject {
   func session(_ session: PeripheralSession, didReadRSSI rssi: NSNumber, error: Error?)
   func session(_ session: PeripheralSession, didUpdateValueFor characteristic: CBCharacteristic, error: Error?)
   func session(_ session: PeripheralSession, didWriteValueFor characteristic: CBCharacteristic, error: Error?)
+  func session(_ session: PeripheralSession, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?)
 }
 
 /// Receives `CBPeripheralDelegate` callbacks on behalf of a session. Private so
@@ -190,5 +219,14 @@ private final class PeripheralDelegateProxy: NSObject, CBPeripheralDelegate {
   ) {
     guard let session else { return }
     owner?.session(session, didWriteValueFor: characteristic, error: error)
+  }
+
+  func peripheral(
+    _ peripheral: CBPeripheral,
+    didUpdateNotificationStateFor characteristic: CBCharacteristic,
+    error: Error?
+  ) {
+    guard let session else { return }
+    owner?.session(session, didUpdateNotificationStateFor: characteristic, error: error)
   }
 }
