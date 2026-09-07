@@ -71,6 +71,38 @@ class ConnectionRegistry(
         connection.discoverServices(onResult)
     }
 
+    @Synchronized
+    fun readCharacteristic(
+        deviceId: String,
+        serviceUuid: String,
+        characteristicUuid: String,
+        onResult: (Result<ByteArray>) -> Unit,
+    ) {
+        val connection = connections[deviceId]
+        if (connection == null) {
+            onResult(Result.failure(BleError(BleErrorCode.DISCONNECTED, "Not connected to $deviceId")))
+            return
+        }
+        connection.readCharacteristic(serviceUuid, characteristicUuid, onResult)
+    }
+
+    @Synchronized
+    fun writeCharacteristic(
+        deviceId: String,
+        serviceUuid: String,
+        characteristicUuid: String,
+        bytes: ByteArray,
+        withResponse: Boolean,
+        onResult: (BleError?) -> Unit,
+    ) {
+        val connection = connections[deviceId]
+        if (connection == null) {
+            onResult(BleError(BleErrorCode.DISCONNECTED, "Not connected to $deviceId"))
+            return
+        }
+        connection.writeCharacteristic(serviceUuid, characteristicUuid, bytes, withResponse, onResult)
+    }
+
     /** Ends every connection; the platform has already dropped them when the radio goes away. */
     @Synchronized
     fun dropAll(reason: BleError?) {
