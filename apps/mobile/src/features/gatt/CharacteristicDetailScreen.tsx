@@ -13,6 +13,8 @@ import { useTheme } from '../../theme/useTheme';
 import { useConnections } from '../connection/ConnectionProvider';
 import { usePacketLog } from '../packets/PacketLogProvider';
 import { formatPacketTime, labelPacket } from '../packets/packetPresentation';
+import { packetSummary, parsePacket } from '../parsers/parsePacket';
+import { ParsedValueView } from '../parsers/ParsedValueView';
 import {
   describeSubscription,
   type SubscriptionPhase,
@@ -168,6 +170,7 @@ export function CharacteristicDetailScreen(): React.JSX.Element {
             >
               {describeLatest(latest.direction, latest.timestamp, latest.bytes.length)}
             </Text>
+            <ParsedValueView outcome={parsePacket(latest)} testID="parsed" />
             <ValueColumns bytes={latest.bytes} testID="value" />
           </>
         )}
@@ -258,10 +261,15 @@ export function CharacteristicDetailScreen(): React.JSX.Element {
         ) : (
           packets.slice(0, RECENT_PACKETS).map((packet, index) => {
             const row = labelPacket(packet);
+            const summary = packetSummary(packet);
             return (
               <View
                 accessible
-                accessibilityLabel={row.accessibilityLabel}
+                accessibilityLabel={
+                  summary === undefined
+                    ? row.accessibilityLabel
+                    : `${row.accessibilityLabel}, ${summary}`
+                }
                 key={packet.id}
                 style={[styles.packet, { backgroundColor: theme.colors.surface }]}
                 testID={`packet-${index}`}
@@ -283,6 +291,14 @@ export function CharacteristicDetailScreen(): React.JSX.Element {
                 >
                   {row.hex}
                 </Text>
+                {summary === undefined ? null : (
+                  <Text
+                    style={[styles.packetParsed, { color: theme.colors.textPrimary }]}
+                    testID={`packet-${index}-parsed`}
+                  >
+                    {summary}
+                  </Text>
+                )}
               </View>
             );
           })
@@ -400,6 +416,10 @@ const styles = StyleSheet.create({
   },
   packetMeta: {
     fontSize: 12,
+  },
+  packetParsed: {
+    fontSize: 14,
+    fontWeight: '600',
   },
   packetHex: {
     fontSize: 15,

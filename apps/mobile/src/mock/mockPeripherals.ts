@@ -42,6 +42,8 @@ export interface MockNotifier {
 
 const utf8 = (text: string): number[] => Array.from(text, char => char.charCodeAt(0));
 const clampByte = (value: number): number => Math.min(255, Math.max(0, value));
+/** An SFLOAT with exponent 0 for a whole number 0..2047, little-endian. */
+const sfloat = (value: number): number[] => [value % 256, Math.floor(value / 256)];
 
 export const HEART_RATE_SERVICE = '0000180D-0000-1000-8000-00805F9B34FB';
 export const BATTERY_SERVICE = '0000180F-0000-1000-8000-00805F9B34FB';
@@ -192,6 +194,27 @@ export const defaultMockPeripherals: MockPeripheral[] = [
       [sig('2A24')]: utf8('HEM-7361T'),
       [sig('2A26')]: utf8('2.3'),
       [sig('2A49')]: [0x1f, 0x00],
+    },
+    notifiers: {
+      // Blood Pressure Measurement indication: flags 0x04 (mmHg, pulse rate present),
+      // then systolic, diastolic, mean arterial pressure and pulse as SFLOATs with
+      // exponent 0, so the value is the little-endian mantissa itself.
+      [sig('2A35')]: {
+        intervalMs: 4_000,
+        produce: (sequence, random) => {
+          const systolic = 118 + (sequence % 3) + Math.round((random() - 0.5) * 4);
+          const diastolic = 78 + (sequence % 2);
+          const mean = Math.round(diastolic + (systolic - diastolic) / 3);
+          const pulse = 70 + (sequence % 4);
+          return [
+            0x04,
+            ...sfloat(systolic),
+            ...sfloat(diastolic),
+            ...sfloat(mean),
+            ...sfloat(pulse),
+          ];
+        },
+      },
     },
   },
   {
