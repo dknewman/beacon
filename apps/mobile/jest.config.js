@@ -7,6 +7,7 @@ module.exports = {
   moduleNameMapper: {
     '^@beacon/ble-contracts$': '<rootDir>/../../packages/ble-contracts/src/index.ts',
     '^@beacon/validation$': '<rootDir>/../../packages/validation/src/index.ts',
+    '^@beacon/protocol-parsers$': '<rootDir>/../../packages/protocol-parsers/src/index.ts',
   },
   // React Navigation and react-native-screens ship ES modules only; the preset's
   // pattern would leave them untransformed and Jest cannot parse `export`.

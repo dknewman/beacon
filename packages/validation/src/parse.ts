@@ -5,6 +5,7 @@ import {
   type BluetoothState,
   type GattService,
   type NativeBleEvent,
+  type ParsedValue,
 } from '@beacon/ble-contracts';
 import type { z } from 'zod';
 import { fail, ok, type ValidationResult } from './result';
@@ -12,6 +13,7 @@ import { bluetoothStateSchema } from './schemas/bluetooth-state';
 import { gattServiceListSchema } from './schemas/gatt';
 import { byteArraySchema, rssiSchema } from './schemas/primitives';
 import { nativeBleEventSchema } from './schemas/native-events';
+import { parsedValueSchema } from './schemas/parsed-value';
 import { blePermissionStateSchema } from './schemas/permissions';
 
 /**
@@ -71,4 +73,10 @@ export function parseGattServices(
 
 export function parseByteArray(input: unknown): ValidationResult<number[], BleError> {
   return validate(byteArraySchema, input, 'Invalid bytes from native');
+}
+
+export function parseParsedValue(
+  input: unknown,
+): ValidationResult<ParsedValue, BleError> {
+  return validate(parsedValueSchema, input, 'Invalid parser output');
 }
