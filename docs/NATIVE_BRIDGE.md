@@ -15,8 +15,28 @@ export interface Spec extends TurboModule {
   requestPermission(): Promise<string>;
   startScan(serviceUuids: string[], allowDuplicates: boolean): Promise<void>;
   stopScan(): Promise<void>;
+  connect(deviceId: string): Promise<void>;
+  disconnect(deviceId: string): Promise<void>;
+  readRssi(deviceId: string): Promise<number>;
+  discoverServices(deviceId: string): Promise<GattServicePayload[]>;
+  readCharacteristic(
+    deviceId: string,
+    serviceUuid: string,
+    characteristicUuid: string,
+  ): Promise<number[]>;
+  writeCharacteristic(
+    deviceId: string,
+    serviceUuid: string,
+    characteristicUuid: string,
+    bytes: number[],
+    withResponse: boolean,
+  ): Promise<void>;
   readonly onBluetoothStateChanged: CodegenTypes.EventEmitter<{ state: string }>;
   readonly onDeviceDiscovered: CodegenTypes.EventEmitter<DeviceDiscoveredEvent>; // BleDevice shape
+  readonly onConnectionStateChanged: CodegenTypes.EventEmitter<{
+    deviceId: string;
+    state: string;
+  }>;
   readonly onBleError: CodegenTypes.EventEmitter<{
     deviceId?: string;
     error: BleErrorPayload;
@@ -40,7 +60,37 @@ Generated artifacts (never committed):
 
 Scalar parameters are chosen over object parameters (`startScan(serviceUuids, allowDuplicates)`
 rather than `startScan(options)`) because arrays and primitives map to plain `NSArray`/`BOOL` and
-`ReadableArray`/`Boolean`, whereas object parameters generate C++ struct wrappers on iOS.
+`ReadableArray`/`Boolean`, whereas object parameters generate C++ struct wrappers on iOS. The same rule gives
+`writeCharacteristic` five scalar arguments rather than the `WriteCharacteristicRequest` object
+the contract uses; the wrapper flattens the request and maps `mode` onto the `withResponse`
+boolean.
+
+### Characteristic values (M5)
+
+`readCharacteristic(deviceId, serviceUuid, characteristicUuid)` resolves with the value as
+unsigned bytes. `writeCharacteristic(deviceId, serviceUuid, characteristicUuid, bytes,
+withResponse)` writes them; with `withResponse` the promise waits for the peripheral's
+acknowledgement, without it the promise resolves once the platform stack has accepted the
+write, which says nothing about whether the peripheral received it. Both are queued behind any
+other GATT operation on the same peripheral (ADR 0006) and reject with:
+
+| Code                       | When                                                                                                                                          |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `disconnected`             | No `ready` link to the device, or the link ended while the operation was queued or in flight                                                  |
+| `service_not_found`        | The discovered table has no such service                                                                                                      |
+| `characteristic_not_found` | The service has no such characteristic                                                                                                        |
+| `read_failed`              | The platform reported an error (status kept in `nativeCode`), or the characteristic lacks the `read` property ("Read not permitted")          |
+| `write_failed`             | The platform reported an error, or the characteristic lacks `write` / `write_without_response` for the requested mode ("Write not permitted") |
+| `invalid_payload`          | A write byte outside `0..255` (rejected natively), or a read result outside it (rejected by the wrapper)                                      |
+
+Byte arrays: values cross the bridge as `number[]` of integers in `0..255`, in both directions.
+`Uint8Array` is not a codegen type and Hermes has no `TextDecoder`, so the application layer
+works on plain arrays throughout (`@beacon/ble-contracts` `bytes.ts`). A pure `ByteArrayMapper`
+on each platform does the conversion and the range check: iOS between `[NSNumber]` and `Data`,
+Android between the doubles React Native delivers and the JVM's signed `ByteArray`, unpacking
+reads as unsigned integers so `0xFF` arrives as `255` on both. A fractional, negative,
+oversized or non-finite value in a write is rejected with `invalid_payload` before the stack
+sees it.
 
 The iOS and Android builds run codegen automatically. The standalone
 `react-native codegen` command also works for inspection, but note that it ignores
@@ -52,10 +102,12 @@ the Gradle build is the source of truth.
 ```text
 BeaconBluetoothModule.mm  (Objective-C++)  — conforms to the generated spec, forwards to Swift
 BluetoothManager.swift                     — owns CBCentralManager; adapter state, permission, scanning, connections
-PeripheralSession.swift                    — one CBPeripheral + private CBPeripheralDelegate proxy, pending completions
+PeripheralSession.swift                    — one CBPeripheral + private CBPeripheralDelegate proxy, pending completions, GATT queue
+GattOperationQueue.swift                   — pure per-peripheral serialization of GATT operations (ADR 0006)
 Mapping/BluetoothStateMapper.swift         — CBManagerState → wire value
 Mapping/ConnectionStateMapper.swift        — BleConnectionState wire vocabulary, CBPeripheralState mapping
-Mapping/GattMapper.swift                   — CBService/CBCharacteristic → GattService payloads, property option set → wire values
+Mapping/GattMapper.swift                   — CBService/CBCharacteristic → GattService payloads, property option set → wire values, canonical UUID for lookups
+Mapping/ByteArrayMapper.swift              — [NSNumber] ⇄ Data with 0...255 range validation
 Mapping/AuthorizationMapper.swift          — CBManagerAuthorization → wire value
 Mapping/AdvertisementMapper.swift          — discovery callback → BleDevice payload, UUID parsing
 Errors/BleError.swift                      — CoreBluetooth errors → contract codes
@@ -81,6 +133,21 @@ error (with `deviceId`) before the `disconnected` transition unless JavaScript a
 disconnect. Cancelling a pending attempt is settled locally because CoreBluetooth does not
 promise a callback for it.
 
+Reads and writes: `PeripheralSession` owns a `GattOperationQueue` and the in-flight read and
+write completions. `readCharacteristic` looks the characteristic up in the cached table
+(comparing `GattMapper.canonicalUuid` on both sides, because CoreBluetooth abbreviates
+SIG-assigned UUIDs while JavaScript sends the 128-bit form), checks the `read` property, and
+enqueues `peripheral.readValue(for:)`; `didUpdateValueFor` settles the completion with the
+bytes (or the error) and calls `finish()`. `writeCharacteristic` validates the bytes with
+`ByteArrayMapper`, checks the property for the requested mode and enqueues
+`writeValue(_:for:type:)`: `.withResponse` is answered by `didWriteValueFor`;
+`.withoutResponse` completes as soon as CoreBluetooth accepted the data because no callback
+follows, and its `start` returns `false` so the queue moves on at once.
+`canSendWriteWithoutResponse` back-pressure is not observed yet, so a burst that overruns the
+stack's buffer is dropped by CoreBluetooth rather than reported. A link that ends for any
+reason cancels the queue and rejects every waiting completion with `disconnected` before the
+transition is emitted.
+
 ## Android
 
 ```text
@@ -89,9 +156,10 @@ BeaconBluetoothPackage.kt  — BaseReactPackage registration (isTurboModule = tr
 BluetoothController.kt     — BluetoothManager/BluetoothAdapter, ACTION_STATE_CHANGED receiver
 scanning/BleScanner.kt     — BluetoothLeScanner, pre-flight checks, throttling, onScanFailed
 connection/ConnectionRegistry.kt — one DeviceConnection per address, shared pre-flight checks
-connection/DeviceConnection.kt   — BluetoothGatt + BluetoothGattCallback, state machine, pending promises
+connection/DeviceConnection.kt   — BluetoothGatt + BluetoothGattCallback, state machine, pending promises, GATT queue
+connection/GattOperationQueue.kt — pure per-connection serialization of GATT operations (ADR 0006)
 permissions/*              — runtime permission flow (see PERMISSIONS.md)
-mapping/BluetoothStateMapper.kt, ConnectionStateMapper.kt, GattStatusMapper.kt, GattTreeMapper.kt, ScanResultMapper.kt, BleUuid.kt, ScanFailureMapper.kt, IsoTimestamp.kt
+mapping/BluetoothStateMapper.kt, ConnectionStateMapper.kt, GattStatusMapper.kt, GattTreeMapper.kt, ByteArrayMapper.kt, ScanResultMapper.kt, BleUuid.kt, ScanFailureMapper.kt, IsoTimestamp.kt
 errors/BleError.kt         — contract codes, Promise.rejectWith, Throwable.toBleError
 ```
 
@@ -106,10 +174,24 @@ TurboModule infrastructure has bound the emitter callback. When the adapter leav
 the module forgets the scan (the platform has already dropped it) so the next `startScan` is a
 real start.
 
+Reads and writes: `DeviceConnection` owns a `GattOperationQueue` under the same instance lock
+as the state machine. `readCharacteristic` finds the characteristic in the discovered tree,
+checks `PROPERTY_READ`, and enqueues `BluetoothGatt.readCharacteristic`; the result arrives in
+`onCharacteristicRead`, on API 33+ through the overload that carries the value and on older
+devices through the legacy one that reads `characteristic.value`. `writeCharacteristic` checks
+the property for the requested mode and enqueues a write with `WRITE_TYPE_DEFAULT` or
+`WRITE_TYPE_NO_RESPONSE`: on API 33+ through `writeCharacteristic(characteristic, value,
+writeType)`, on older devices by setting the characteristic's value and write type first
+(the deprecated path). Both are answered by `onCharacteristicWrite`, which for a write without
+response confirms only that the local stack sent it. A `false` or non-success return from the
+platform call settles the promise with `write_failed` / `read_failed` and lets the queue move
+on; closing the client cancels the queue and rejects every waiting promise with `disconnected`.
+
 ## JavaScript wrapper
 
 `apps/mobile/src/native/createNativeBleClient.ts` implements `BleClient`
-(`BluetoothAdapterApi & PermissionApi & ScanApi`):
+(`BluetoothAdapterApi & PermissionApi & ScanApi & ConnectionApi & GattDiscoveryApi &
+GattValueApi`):
 
 - Value-returning calls validate the result (`parseBluetoothState`, `parseBlePermissionState`);
   invalid values reject with `BleError("invalid_payload")`; native rejections are mapped with
@@ -120,6 +202,10 @@ real start.
   (`parseRssi`), so a bogus 127 from a platform becomes `invalid_payload`.
 - `discoverServices` results are validated with `parseGattServices`: every UUID is normalized
   to canonical form and every property must be a `CharacteristicProperty`.
+- `readCharacteristic` results are validated with `parseByteArray` (every element an integer in
+  `0..255`); rejections default to `read_failed`. `writeCharacteristic(request)` flattens the
+  request onto the five scalar spec arguments, mapping `mode: 'with_response'` onto
+  `withResponse: true`; rejections default to `write_failed`.
 - `subscribe()` folds the four typed emitters into the `NativeBleEvent` union, validates each
   payload (`scan.device_discovered` also normalizes UUIDs), and returns one unsubscribe function
   that removes every native subscription.
@@ -135,6 +221,8 @@ rejection `userInfo`. JavaScript reads `code` in `toBleError`.
 1. Add the method or emitter to the spec using codegen-compatible types.
 2. Add the matching segment implementation to the contract wrapper and validate its payloads.
 3. Implement in Swift (`BluetoothManager` or a new `PeripheralSession`) and expose through the
-   `.mm` shim.
+   `.mm` shim. A GATT operation goes through the session's `GattOperationQueue` and calls
+   `finish()` from its delegate callback.
 4. Implement in Kotlin (`BluetoothController` / `DeviceConnection`) and override in the module.
+   A GATT operation goes through the connection's `GattOperationQueue` under the instance lock.
 5. Add JS tests with a fake spec, plus XCTest and JUnit tests for pure mapping logic.

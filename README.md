@@ -10,9 +10,9 @@ through a narrow, codegen-typed Turbo Module whose every payload is validated at
 it reaches application state.
 
 > Status: **M0 (Foundation)**, **M1 (Bluetooth state and permissions)**, **M2 (Device
-> scanning)**, **M3 (Connection lifecycle)** and **M4 (GATT discovery)** are implemented. See
-> [Milestone status](#milestone-status) for exactly what has and has not been validated, on
-> which hardware.
+> scanning)**, **M3 (Connection lifecycle)**, **M4 (GATT discovery)** and **M5 (Characteristic
+> read and write)** are implemented. See [Milestone status](#milestone-status) for exactly what
+> has and has not been validated, on which hardware.
 
 ## What It Is
 
@@ -85,6 +85,11 @@ disconnecting | failed`) mirrored from native events. `connect()` resolves at `r
   Every UUID is normalized and every property checked against the contract before the table
   reaches the GATT inspector, which labels services and characteristics from the known UUID
   registry (`@beacon/ble-contracts`, PROJECT.md 34).
+- Reads and writes (`GattValueApi`) carry values as plain `number[]` in `0..255`; the wrapper
+  validates every read result and flattens the write request (`mode` becomes the
+  `withResponse` boolean) onto scalar spec arguments. Native serializes GATT operations per
+  peripheral in a pure `GattOperationQueue` and rejects everything queued with `disconnected`
+  when the link ends. See [ADR 0006](docs/ADR/0006-gatt-operation-queue-and-packet-log.md).
 
 ## iOS CoreBluetooth
 
@@ -105,10 +110,18 @@ disconnecting | failed`) mirrored from native events. `connect()` resolves at `r
   disconnects as errors before the `disconnected` transition. Peripherals seen by the scanner
   are retained so they can be connected later. A link reports `ready` only after every service's
   characteristics have been discovered; the mapped table is cached on the session.
+- `GattOperationQueue.swift` serializes GATT operations per peripheral without depending on
+  CoreBluetooth: `PeripheralSession` enqueues `readValue(for:)` and `writeValue(_:for:type:)`
+  after checking the characteristic's properties, finishes the queue from `didUpdateValueFor`
+  and `didWriteValueFor` (a `.withoutResponse` write completes as soon as the stack accepted
+  it), and cancels it when the link ends so every waiting completion is rejected with
+  `disconnected`.
 - `Mapping/BluetoothStateMapper.swift`, `Mapping/AuthorizationMapper.swift`,
   `Mapping/AdvertisementMapper.swift` (advertisement dictionary → `BleDevice` shape, hex and
   ISO-8601 encoding), `Mapping/ConnectionStateMapper.swift`, `Mapping/GattMapper.swift`
-  (property option set → wire values) and `Errors/BleError.swift` are pure and covered by XCTest.
+  (property option set → wire values, canonical UUIDs for characteristic lookups),
+  `Mapping/ByteArrayMapper.swift` (`[NSNumber]` ⇄ `Data` with range validation) and
+  `Errors/BleError.swift` are pure and covered by XCTest.
 - `BeaconBluetoothModule.mm` is a thin Objective-C++ class conforming to the generated spec and
   forwarding to Swift. It contains no Bluetooth logic.
 
@@ -131,9 +144,17 @@ disconnecting | failed`) mirrored from native events. `connect()` resolves at `r
   `connection/ConnectionRegistry.kt` keeps one connection per address behind shared pre-flight
   checks. `mapping/GattStatusMapper.kt` turns status codes (133, 8, 19, 22, 62) into contract
   errors with the platform status preserved.
+- `connection/GattOperationQueue.kt` serializes GATT operations per connection without an
+  Android dependency: `DeviceConnection` enqueues `readCharacteristic` and `writeCharacteristic`
+  (`WRITE_TYPE_DEFAULT` / `WRITE_TYPE_NO_RESPONSE`, the API 33 value-carrying overloads on new
+  devices and the deprecated value-setting path below) after checking the property bits,
+  finishes the queue from `onCharacteristicRead` (both the API 33 and the legacy signature) and
+  `onCharacteristicWrite`, and cancels it on close so every waiting promise is rejected with
+  `disconnected`.
 - `mapping/BluetoothStateMapper.kt`, `mapping/ConnectionStateMapper.kt`,
   `mapping/GattStatusMapper.kt`, `mapping/GattTreeMapper.kt` (property bitmask → wire values,
-  tree snapshot), `mapping/ScanResultMapper.kt` (manufacturer data re-serialized
+  tree snapshot), `mapping/ByteArrayMapper.kt` (bridge doubles ⇄ signed `ByteArray` with range
+  validation, unsigned on the way out), `mapping/ScanResultMapper.kt` (manufacturer data re-serialized
   with the little-endian company id so it matches iOS), `mapping/BleUuid.kt`,
   `mapping/ScanFailureMapper.kt`, `mapping/IsoTimestamp.kt`, `permissions/PermissionStateMapper.kt`,
   `permissions/RequiredPermissions.kt` and `errors/BleError.kt` are pure and covered by JUnit.
@@ -145,8 +166,24 @@ disconnecting | failed`) mirrored from native events. `connect()` resolves at `r
 `apps/mobile/src/features/gatt/`: `GattProvider` keeps one discovered table per connected device
 and drops it with the link; `GattInspectorScreen` lists services and characteristics with names
 from the known UUID registry and the characteristic properties; `CharacteristicDetailScreen`
-shows identity and properties, and states plainly that reads, writes and subscriptions arrive
-with M5 and M6 rather than showing dead controls.
+shows identity and properties, the read and write controls described below, and states
+plainly that subscriptions arrive with M6 rather than showing a dead control.
+
+## Characteristic Read and Write
+
+`apps/mobile/src/features/gatt/` and `apps/mobile/src/features/packets/`: the characteristic
+screen offers Read when the characteristic advertises `read` and a write form when it
+advertises `write` or `write_without_response`, each enabled only while the link is `ready` and
+no other operation is in flight (`useCharacteristicOperations`, one operation at a time with an
+`idle | reading | writing` state and a "Last operation" row that names the contract code when
+something fails). The write form takes HEX, decimal or UTF-8 text, parses it on every keystroke
+into a validation message or a byte preview, and offers "Write with response" and "Write
+without response" per the properties. The latest value is shown in HEX, DECIMAL, BINARY, ASCII
+and UTF-8 columns (`ValueColumns`; the codec in `@beacon/ble-contracts` is hand written
+because Hermes has no `TextDecoder`). Every successful read lands as an incoming packet and
+every successful write as an outgoing one in `PacketLogProvider`, a per-device ring buffer of
+500 packets above navigation that the screen lists (latest 20) and that the packet inspector,
+the M7 parsers and the M8 recorder will share. Failures are reported, not logged.
 
 ## Protocol Parsers, Session Recording
 
@@ -175,14 +212,16 @@ See [docs/TESTING.md](docs/TESTING.md) for the strategy and the mock layer plan.
 
 ## Mock BLE Environment
 
-`apps/mobile/src/mock/createMockBleClient.ts` implements the M3 client surface with scripted
-peripherals (heart rate monitor, weight scale, blood pressure monitor, Nordic UART device and an
-unnamed beacon) that advertise on realistic intervals with drifting RSSI, connect through every
-transition, answer RSSI reads, and can be scripted to refuse, stall or drop a connection. It
-refuses to scan or connect when the simulated radio is off or permission is missing. Set `USE_MOCK_BLE_CLIENT` to `true` in
-`apps/mobile/src/app/runtimeOptions.ts` to run the app against it on a simulator or without
-peripherals nearby. It grows into the full M10 environment (connections, GATT, failure
-scenarios) as those segments land. Tests use `FakeBleClient`, which keeps every native call
+`apps/mobile/src/mock/createMockBleClient.ts` implements the client surface through M5 with
+scripted peripherals (heart rate monitor, weight scale, blood pressure monitor, Nordic UART
+device and an unnamed beacon) that advertise on realistic intervals with drifting RSSI, connect
+through every transition, answer RSSI reads, serve a scripted GATT table and characteristic
+values, store writes so the next read returns them, enforce characteristic properties the way
+native does, and can be scripted to refuse, stall or drop a connection or to fail the next
+read or write. It refuses to scan or connect when the simulated radio is off or permission is
+missing. Set `USE_MOCK_BLE_CLIENT` to `true` in `apps/mobile/src/app/runtimeOptions.ts` to run
+the app against it on a simulator or without peripherals nearby. It grows into the full M10
+environment (notifications, remaining failure scenarios) as those segments land. Tests use `FakeBleClient`, which keeps every native call
 pending until the test settles it.
 
 ## Tech Stack
@@ -245,12 +284,13 @@ beacon/
 │       ├── features/bluetooth/  adapter + permission machines, readiness panel
 │       ├── features/scan/       scan coordinator, device cache, filters, device list screen
 │       ├── features/connection/ connection coordinator, per-device machine, device detail screen
-│       ├── features/gatt/       GATT table provider, inspector and characteristic screens
+│       ├── features/gatt/       GATT table provider, inspector and characteristic screens, read/write operations
+│       ├── features/packets/    per-device packet log (ring buffer) and packet row presentation
 │       ├── mock/                scripted mock BLE client (runtime option)
 │       ├── native/              Turbo Module spec + validated client wrapper
 │       └── theme/
 ├── packages/
-│   ├── ble-contracts/           domain models, state unions, errors, bridge contract, UUIDs, known UUID registry
+│   ├── ble-contracts/           domain models, state unions, errors, bridge contract, UUIDs, known UUID registry, byte codecs
 │   └── validation/              zod schemas + parse helpers for the native boundary
 ├── docs/                        architecture, state model, bridge, permissions, testing, ADRs
 ├── scripts/ios/                 Xcode project sync (xcodeproj gem)
@@ -264,15 +304,19 @@ beacon/
 - [ADR 0003](docs/ADR/0003-monorepo-workspace-layout.md): yarn workspaces monorepo with node-resolved native build paths.
 - [ADR 0004](docs/ADR/0004-scan-duplicates-and-device-cache.md): request duplicate advertisements, throttle natively, deduplicate and smooth in the application-layer device cache.
 - [ADR 0005](docs/ADR/0005-navigation-and-connection-promise-semantics.md): React Navigation native stack above the coordinators; `connect()` resolves at `ready`; JavaScript owns the connection timeout.
+- [ADR 0006](docs/ADR/0006-gatt-operation-queue-and-packet-log.md): pure per-connection GATT operation queue in native; one operation at a time from the UI; bounded packet log above navigation; bytes as `number[]` across the bridge.
 
 ## Milestone status
 
-| Milestone                          | Status                                                | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| ---------------------------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| M0 Foundation                      | Implemented, CI green, **launched on an iPhone**      | Typecheck, lint and Jest pass. CI builds the release APK and runs the Kotlin JUnit tests; CI builds the iOS app and runs the Swift XCTests on a simulator. The iOS app was built from Xcode and launched on a physical iPhone (Debug configuration, New Architecture, embedded bundle): the home screen rendered. Android has not yet been launched on a device by a person.                                                                                                                                                                                                |
-| M1 Bluetooth state and permissions | Implemented, **partially validated on an iPhone**     | `PermissionApi` on the bridge; iOS authorization mapping with the prompt deferred to an explicit user action; Android runtime requests scoped by API level with denied/blocked distinction; permission state machine, readiness derivation and settings guidance in the UI; Jest, XCTest and JUnit coverage. Observed on a physical iPhone: **powered on + permission granted → "Ready"**. Not yet observed by a person: powered off, unauthorized (denied), unsupported, and every Android state.                                                                          |
-| M2 Device scanning                 | Implemented, CI-validated, **no hardware validation** | `ScanApi` on the bridge with discovery and error emitters; scan coordinator with an explicit scan machine; device cache with deduplication, RSSI smoothing and stale hiding; filters; device list screen; scripted mock scanner; CoreBluetooth scanning with per-peripheral throttling; `BluetoothLeScanner` with pre-flight checks and failure mapping. The M2 gate (start, devices appear, RSSI updates, no duplicate rows, stop, events stop) is exercised by Jest against the fake client and by the mock client's own tests; no person has yet run a scan on a device. |
-| M3 and later                       | Not started                                           |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Milestone                          | Status                                                | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ---------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| M0 Foundation                      | Implemented, CI green, **launched on an iPhone**      | Typecheck, lint and Jest pass. CI builds the release APK and runs the Kotlin JUnit tests; CI builds the iOS app and runs the Swift XCTests on a simulator. The iOS app was built from Xcode and launched on a physical iPhone (Debug configuration, New Architecture, embedded bundle): the home screen rendered. Android has not yet been launched on a device by a person.                                                                                                                                                                                                                                                                                 |
+| M1 Bluetooth state and permissions | Implemented, **partially validated on an iPhone**     | `PermissionApi` on the bridge; iOS authorization mapping with the prompt deferred to an explicit user action; Android runtime requests scoped by API level with denied/blocked distinction; permission state machine, readiness derivation and settings guidance in the UI; Jest, XCTest and JUnit coverage. Observed on a physical iPhone: **powered on + permission granted → "Ready"**. Not yet observed by a person: powered off, unauthorized (denied), unsupported, and every Android state.                                                                                                                                                           |
+| M2 Device scanning                 | Implemented, CI-validated, **no hardware validation** | `ScanApi` on the bridge with discovery and error emitters; scan coordinator with an explicit scan machine; device cache with deduplication, RSSI smoothing and stale hiding; filters; device list screen; scripted mock scanner; CoreBluetooth scanning with per-peripheral throttling; `BluetoothLeScanner` with pre-flight checks and failure mapping. The M2 gate (start, devices appear, RSSI updates, no duplicate rows, stop, events stop) is exercised by Jest against the fake client and by the mock client's own tests; no person has yet run a scan on a device.                                                                                  |
+| M3 Connection lifecycle            | Implemented, CI-validated, **no hardware validation** | `ConnectionApi` on the bridge with the connection-state emitter; connection coordinator with one explicit per-device machine mirrored from native, a 15 s timeout owned by JavaScript and errors ordered before the `disconnected` they cause; device detail screen with live RSSI; mock connections that can refuse, stall or drop; `PeripheralSession` on iOS and `DeviceConnection` / `ConnectionRegistry` on Android with status mapping. Every transition, cancellation, timeout and remote drop is exercised by Jest against the fake client; no person has yet connected to a peripheral from a device.                                               |
+| M4 GATT discovery                  | Implemented, CI-validated, **no hardware validation** | `GattDiscoveryApi` on the bridge; native discovers the whole table while connecting and serves it from cache; UUID normalization and property validation at the boundary; known UUID registry; GATT inspector and characteristic detail screens; `GattMapper` / `GattTreeMapper` covered by XCTest and JUnit. Discovery, failure and the table being dropped with the link are exercised by Jest; no person has yet inspected a real peripheral's table on a device.                                                                                                                                                                                         |
+| M5 Characteristic read and write   | Implemented, CI-validated, **no hardware validation** | `GattValueApi` on the bridge (`readCharacteristic`, `writeCharacteristic` with and without response, bytes as `number[]`); per-characteristic operation state with one operation in flight; write form with HEX / decimal / UTF-8 input and live validation; HEX, DECIMAL, BINARY, ASCII and UTF-8 value columns; per-device packet log above navigation; mock reads and writes with property enforcement; pure `GattOperationQueue` in Swift and Kotlin with unit tests. Reads, writes, both failure paths and a link dropping mid-operation are exercised by Jest against the fake client; no person has yet read or written a characteristic on a device. |
+| M6 and later                       | Not started                                           |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
 ## Roadmap
 
