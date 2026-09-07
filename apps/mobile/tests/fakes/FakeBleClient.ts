@@ -5,6 +5,7 @@ import type {
   NativeBleEvent,
   ScanOptions,
   Unsubscribe,
+  WriteCharacteristicRequest,
 } from '@beacon/ble-contracts';
 import type { BleClient } from '../../src/native/BleClient';
 
@@ -23,6 +24,8 @@ interface PendingCalls {
   disconnect: Deferred<void>[];
   readRssi: Deferred<number>[];
   discoverServices: Deferred<GattService[]>[];
+  readCharacteristic: Deferred<number[]>[];
+  writeCharacteristic: Deferred<void>[];
 }
 
 /**
@@ -43,6 +46,8 @@ export class FakeBleClient implements BleClient {
     disconnect: [],
     readRssi: [],
     discoverServices: [],
+    readCharacteristic: [],
+    writeCharacteristic: [],
   };
 
   getBluetoothStateCalls = 0;
@@ -54,6 +59,12 @@ export class FakeBleClient implements BleClient {
   disconnectCalls: string[] = [];
   readRssiCalls: string[] = [];
   discoverServicesCalls: string[] = [];
+  readCalls: Array<{
+    deviceId: string;
+    serviceUuid: string;
+    characteristicUuid: string;
+  }> = [];
+  writeCalls: WriteCharacteristicRequest[] = [];
 
   getBluetoothState(): Promise<BluetoothState> {
     this.getBluetoothStateCalls += 1;
@@ -98,6 +109,20 @@ export class FakeBleClient implements BleClient {
   discoverServices(deviceId: string): Promise<GattService[]> {
     this.discoverServicesCalls.push(deviceId);
     return this.defer('discoverServices');
+  }
+
+  readCharacteristic(
+    deviceId: string,
+    serviceUuid: string,
+    characteristicUuid: string,
+  ): Promise<number[]> {
+    this.readCalls.push({ deviceId, serviceUuid, characteristicUuid });
+    return this.defer('readCharacteristic');
+  }
+
+  writeCharacteristic(request: WriteCharacteristicRequest): Promise<void> {
+    this.writeCalls.push(request);
+    return this.defer('writeCharacteristic');
   }
 
   subscribe(listener: (event: NativeBleEvent) => void): Unsubscribe {
@@ -181,6 +206,22 @@ export class FakeBleClient implements BleClient {
 
   rejectServices(error: unknown): void {
     this.take('discoverServices').forEach(d => d.reject(error));
+  }
+
+  resolveRead(bytes: number[]): void {
+    this.take('readCharacteristic').forEach(d => d.resolve(bytes));
+  }
+
+  rejectRead(error: unknown): void {
+    this.take('readCharacteristic').forEach(d => d.reject(error));
+  }
+
+  resolveWrite(): void {
+    this.take('writeCharacteristic').forEach(d => d.resolve());
+  }
+
+  rejectWrite(error: unknown): void {
+    this.take('writeCharacteristic').forEach(d => d.reject(error));
   }
 
   /** Emits the native transition sequence for a connection that reaches `ready`. */

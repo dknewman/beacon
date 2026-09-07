@@ -21,6 +21,8 @@ type SpecOverrides = Partial<
     | 'disconnect'
     | 'readRssi'
     | 'discoverServices'
+    | 'readCharacteristic'
+    | 'writeCharacteristic'
   >
 >;
 
@@ -55,6 +57,13 @@ function createFakeSpec(overrides: SpecOverrides = {}) {
   const connection = createEmitter<ConnectionStateChangedEvent>();
   const errors = createEmitter<BleErrorEvent>();
   const startScanCalls: Array<{ serviceUuids: string[]; allowDuplicates: boolean }> = [];
+  const writeCalls: Array<{
+    deviceId: string;
+    serviceUuid: string;
+    characteristicUuid: string;
+    bytes: number[];
+    withResponse: boolean;
+  }> = [];
   const spec: Spec = {
     getBluetoothState: () => Promise.resolve('powered_on'),
     getPermissionState: () => Promise.resolve('granted'),
@@ -77,6 +86,17 @@ function createFakeSpec(overrides: SpecOverrides = {}) {
           ],
         },
       ]),
+    readCharacteristic: () => Promise.resolve([0x02, 0x9a]),
+    writeCharacteristic: (
+      deviceId,
+      serviceUuid,
+      characteristicUuid,
+      bytes,
+      withResponse,
+    ) => {
+      writeCalls.push({ deviceId, serviceUuid, characteristicUuid, bytes, withResponse });
+      return Promise.resolve();
+    },
     ...overrides,
     onBluetoothStateChanged: stateChanged.emitter,
     onDeviceDiscovered: discovered.emitter,
@@ -86,6 +106,7 @@ function createFakeSpec(overrides: SpecOverrides = {}) {
   return {
     spec,
     startScanCalls,
+    writeCalls,
     emitState: stateChanged.emit,
     emitDevice: discovered.emit,
     emitConnection: connection.emit,
@@ -264,6 +285,50 @@ describe('createNativeBleClient', () => {
       ).rejects.toMatchObject({
         code: 'invalid_payload',
       });
+    });
+
+    it('validates read bytes and maps write modes onto the boolean flag', async () => {
+      const fake = createFakeSpec();
+      const client = createNativeBleClient(fake.spec);
+      await expect(client.readCharacteristic('a', '180F', '2A19')).resolves.toEqual([
+        0x02, 0x9a,
+      ]);
+      await client.writeCharacteristic({
+        deviceId: 'a',
+        serviceUuid: '180F',
+        characteristicUuid: '2A19',
+        bytes: [1, 2],
+        mode: 'without_response',
+      });
+      await client.writeCharacteristic({
+        deviceId: 'a',
+        serviceUuid: '180F',
+        characteristicUuid: '2A19',
+        bytes: [3],
+        mode: 'with_response',
+      });
+      expect(fake.writeCalls.map(call => [call.bytes, call.withResponse])).toEqual([
+        [[1, 2], false],
+        [[3], true],
+      ]);
+
+      const { spec } = createFakeSpec({
+        readCharacteristic: () => Promise.resolve([256]),
+        writeCharacteristic: () => Promise.reject(new Error('GATT 3')),
+      });
+      const bad = createNativeBleClient(spec);
+      await expect(bad.readCharacteristic('a', '180F', '2A19')).rejects.toMatchObject({
+        code: 'invalid_payload',
+      });
+      await expect(
+        bad.writeCharacteristic({
+          deviceId: 'a',
+          serviceUuid: '180F',
+          characteristicUuid: '2A19',
+          bytes: [],
+          mode: 'with_response',
+        }),
+      ).rejects.toMatchObject({ code: 'write_failed' });
     });
 
     it('validates RSSI reads', async () => {

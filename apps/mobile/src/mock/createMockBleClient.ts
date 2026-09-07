@@ -3,10 +3,12 @@ import {
   type BlePermissionState,
   type BluetoothState,
   type ConnectionState,
+  type GattCharacteristic,
   type GattService,
   type NativeBleEvent,
   type ScanOptions,
   type Unsubscribe,
+  type WriteCharacteristicRequest,
 } from '@beacon/ble-contracts';
 import type { BleClient } from '../native/BleClient';
 import { defaultMockPeripherals, type MockPeripheral } from './mockPeripherals';
@@ -49,6 +51,12 @@ export interface MockBleClient extends BleClient {
   stallNextConnect(deviceId: string): void;
   /** Simulates the peripheral dropping an established link. */
   dropConnection(deviceId: string): void;
+  /** Makes the next read of this characteristic reject (once) with this error. */
+  failNextRead(deviceId: string, characteristicUuid: string, error: BleError): void;
+  /** Makes the next write to this characteristic reject (once) with this error. */
+  failNextWrite(deviceId: string, characteristicUuid: string, error: BleError): void;
+  /** Current scripted value of a characteristic, after any writes this session. */
+  valueOf(deviceId: string, characteristicUuid: string): number[] | undefined;
   connectionStateOf(deviceId: string): ConnectionState;
   readonly isScanning: boolean;
 }
@@ -94,7 +102,64 @@ export function createMockBleClient(options: MockBleClientOptions = {}): MockBle
   const advertisers = new Map<string, unknown>();
   const rssiByPeripheral = new Map<string, number>();
   const links = new Map<string, MockLink>();
+  /** Characteristic values by `${deviceId}/${characteristicUuid}`; seeded lazily from the script. */
+  const values = new Map<string, number[]>();
+  const nextReadErrors = new Map<string, BleError>();
+  const nextWriteErrors = new Map<string, BleError>();
   let scanFilter: string[] = [];
+
+  const valueKey = (deviceId: string, characteristicUuid: string) =>
+    `${deviceId}/${characteristicUuid.toUpperCase()}`;
+
+  /** Finds a characteristic on a ready link, throwing the errors native would. */
+  const characteristicOf = (
+    deviceId: string,
+    serviceUuid: string,
+    characteristicUuid: string,
+  ): { peripheral: MockPeripheral; characteristic: GattCharacteristic } => {
+    const link = links.get(deviceId);
+    const peripheral = peripherals.find(candidate => candidate.id === deviceId);
+    if (link === undefined || link.state !== 'ready' || peripheral === undefined) {
+      throw new BleError({
+        code: 'disconnected',
+        message: `Not connected to ${deviceId}`,
+      });
+    }
+    const service = peripheral.services.find(
+      candidate => candidate.uuid.toUpperCase() === serviceUuid.toUpperCase(),
+    );
+    if (service === undefined) {
+      throw new BleError({
+        code: 'service_not_found',
+        message: `Service ${serviceUuid} not found on ${deviceId}`,
+      });
+    }
+    const characteristic = service.characteristics.find(
+      candidate => candidate.uuid.toUpperCase() === characteristicUuid.toUpperCase(),
+    );
+    if (characteristic === undefined) {
+      throw new BleError({
+        code: 'characteristic_not_found',
+        message: `Characteristic ${characteristicUuid} not found in ${serviceUuid}`,
+      });
+    }
+    return { peripheral, characteristic };
+  };
+
+  const currentValue = (
+    peripheral: MockPeripheral,
+    characteristicUuid: string,
+  ): number[] => {
+    const key = valueKey(peripheral.id, characteristicUuid);
+    const stored = values.get(key);
+    if (stored !== undefined) {
+      return stored;
+    }
+    const scripted = Object.entries(peripheral.values ?? {}).find(
+      ([uuid]) => uuid.toUpperCase() === characteristicUuid.toUpperCase(),
+    )?.[1];
+    return scripted ?? [];
+  };
 
   const emit = (event: NativeBleEvent) => {
     listeners.forEach(listener => listener(event));
@@ -377,6 +442,60 @@ export function createMockBleClient(options: MockBleClientOptions = {}): MockBle
         }));
       }),
 
+    readCharacteristic: (
+      deviceId: string,
+      serviceUuid: string,
+      characteristicUuid: string,
+    ) =>
+      later((): number[] => {
+        const { peripheral, characteristic } = characteristicOf(
+          deviceId,
+          serviceUuid,
+          characteristicUuid,
+        );
+        const key = valueKey(deviceId, characteristicUuid);
+        const scriptedError = nextReadErrors.get(key);
+        if (scriptedError !== undefined) {
+          nextReadErrors.delete(key);
+          throw scriptedError;
+        }
+        if (!characteristic.properties.includes('read')) {
+          throw new BleError({
+            code: 'read_failed',
+            message: 'Read not permitted',
+            nativeCode: '2',
+            nativeDomain: 'MockGatt',
+          });
+        }
+        return [...currentValue(peripheral, characteristic.uuid)];
+      }),
+
+    writeCharacteristic: (request: WriteCharacteristicRequest) =>
+      later((): void => {
+        const { characteristic } = characteristicOf(
+          request.deviceId,
+          request.serviceUuid,
+          request.characteristicUuid,
+        );
+        const key = valueKey(request.deviceId, request.characteristicUuid);
+        const scriptedError = nextWriteErrors.get(key);
+        if (scriptedError !== undefined) {
+          nextWriteErrors.delete(key);
+          throw scriptedError;
+        }
+        const needed =
+          request.mode === 'with_response' ? 'write' : 'write_without_response';
+        if (!characteristic.properties.includes(needed)) {
+          throw new BleError({
+            code: 'write_failed',
+            message: 'Write not permitted',
+            nativeCode: '3',
+            nativeDomain: 'MockGatt',
+          });
+        }
+        values.set(valueKey(request.deviceId, characteristic.uuid), [...request.bytes]);
+      }),
+
     subscribe(listener: (event: NativeBleEvent) => void): Unsubscribe {
       listeners.add(listener);
       return () => {
@@ -433,6 +552,22 @@ export function createMockBleClient(options: MockBleClientOptions = {}): MockBle
           message: 'The peripheral closed the connection',
         }),
       );
+    },
+
+    failNextRead(deviceId: string, characteristicUuid: string, error: BleError) {
+      nextReadErrors.set(valueKey(deviceId, characteristicUuid), error);
+    },
+
+    failNextWrite(deviceId: string, characteristicUuid: string, error: BleError) {
+      nextWriteErrors.set(valueKey(deviceId, characteristicUuid), error);
+    },
+
+    valueOf(deviceId: string, characteristicUuid: string): number[] | undefined {
+      const peripheral = peripherals.find(candidate => candidate.id === deviceId);
+      if (peripheral === undefined) {
+        return undefined;
+      }
+      return [...currentValue(peripheral, characteristicUuid)];
     },
 
     connectionStateOf(deviceId: string): ConnectionState {
