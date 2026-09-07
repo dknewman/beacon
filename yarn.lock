@@ -1448,6 +1448,11 @@
     "@nodelib/fs.scandir" "2.1.5"
     fastq "^1.6.0"
 
+"@op-engineering/op-sqlite@18.2.0":
+  version "18.2.0"
+  resolved "https://registry.yarnpkg.com/@op-engineering/op-sqlite/-/op-sqlite-18.2.0.tgz#252950d19d4e26cdf1dae41a8283a427d5a31baa"
+  integrity sha512-H3zWRYL2rJvmxNb2wwdhQJW42QutxJG8q8m4a4XBaDzNYYfGVqv6z1QWUVQ0rV4pjyEVYm5zMs75Z4jeVaow+A==
+
 "@react-native-community/cli-clean@20.2.0":
   version "20.2.0"
   resolved "https://registry.yarnpkg.com/@react-native-community/cli-clean/-/cli-clean-20.2.0.tgz#6869513f657df5879069c26bcdc0e8d0161f6627"
@@ -1927,6 +1932,11 @@
   dependencies:
     "@babel/types" "^7.28.2"
 
+"@types/emscripten@*":
+  version "1.41.6"
+  resolved "https://registry.yarnpkg.com/@types/emscripten/-/emscripten-1.41.6.tgz#0d852a4c29fc2c035ed9232f00135717f1a920f1"
+  integrity sha512-uN+9i8bFT5CUcZfyIEYDrSueACEyKGbUs5kC/72DGlZZoinh84sJfVV0i8UOJD1asdzkvLPBRrKs41kZ8MdEXg==
+
 "@types/estree@^1.0.6":
   version "1.0.9"
   resolved "https://registry.yarnpkg.com/@types/estree/-/estree-1.0.9.tgz#cf3f0e876d7bee15a93ab925b82bf570a3904a24"
@@ -1989,6 +1999,14 @@
   integrity sha512-AnzbBERsrLKtk2XSfTbYRLjQPdy116Sty4q+T+Bp3IC4l6jNBvreVPAHmpq9qhXQM7CXZPjLVmGMw9sy+hxQ3w==
   dependencies:
     csstype "^3.2.2"
+
+"@types/sql.js@^1.4.11":
+  version "1.4.11"
+  resolved "https://registry.yarnpkg.com/@types/sql.js/-/sql.js-1.4.11.tgz#1c435899fe33248e7ec99d9becbdff86ede96e07"
+  integrity sha512-QXIx38p2ZThJaK9vP5ZdqdlRe1FG9I8SmCZOS7FHfB/2qPAjZwkL7/vlfPg6N/oWHuuOaGg/P/IRwfP2W0kWVQ==
+  dependencies:
+    "@types/emscripten" "*"
+    "@types/node" "*"
 
 "@types/stack-utils@^2.0.0":
   version "2.0.3"
@@ -6081,6 +6099,11 @@ sprintf-js@~1.0.2:
   version "1.0.3"
   resolved "https://registry.yarnpkg.com/sprintf-js/-/sprintf-js-1.0.3.tgz#04e6926f662895354f3dd015203633b857297e2c"
   integrity sha512-D9cPgkvLlV3t3IzL0D0YLvGA9Ahk4PcvVwUbN0dSGr1aP0Nrt4AEnTUbuGvquEC0mA64Gqt1fzirlRs5ibXx8g==
+
+sql.js@1:
+  version "1.14.2"
+  resolved "https://registry.yarnpkg.com/sql.js/-/sql.js-1.14.2.tgz#01088911d183482b6f961b3563233df69edc9ab5"
+  integrity sha512-3ZGPovObMFrdw79zrUHbfdE/DLIsy8jdNdssmMSQuRAymedU6q84asPt0kgiqrdMYlPegDItiIMfmIXzZnYFcw==
 
 stack-utils@^2.0.3:
   version "2.0.6"

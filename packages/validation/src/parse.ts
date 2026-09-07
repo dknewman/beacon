@@ -6,6 +6,9 @@ import {
   type GattService,
   type NativeBleEvent,
   type ParsedValue,
+  type BleSession,
+  type SessionEvent,
+  type SessionEventInput,
 } from '@beacon/ble-contracts';
 import type { z } from 'zod';
 import { fail, ok, type ValidationResult } from './result';
@@ -14,6 +17,11 @@ import { gattServiceListSchema } from './schemas/gatt';
 import { byteArraySchema, rssiSchema } from './schemas/primitives';
 import { nativeBleEventSchema } from './schemas/native-events';
 import { parsedValueSchema } from './schemas/parsed-value';
+import {
+  bleSessionSchema,
+  sessionEventInputSchema,
+  sessionEventSchema,
+} from './schemas/session';
 import { blePermissionStateSchema } from './schemas/permissions';
 
 /**
@@ -79,4 +87,20 @@ export function parseParsedValue(
   input: unknown,
 ): ValidationResult<ParsedValue, BleError> {
   return validate(parsedValueSchema, input, 'Invalid parser output');
+}
+
+export function parseBleSession(input: unknown): ValidationResult<BleSession, BleError> {
+  return validate(bleSessionSchema, input, 'Invalid persisted session');
+}
+
+export function parseSessionEventInput(
+  input: unknown,
+): ValidationResult<SessionEventInput, BleError> {
+  return validate(sessionEventInputSchema, input, 'Invalid persisted session event');
+}
+
+export function parseSessionEvent(
+  input: unknown,
+): ValidationResult<SessionEvent, BleError> {
+  return validate(sessionEventSchema, input, 'Invalid persisted session event');
 }
