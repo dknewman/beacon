@@ -54,6 +54,15 @@ export interface SessionRecorderProviderProps {
 export const DEFAULT_SESSION_FLUSH_INTERVAL_MS = 250;
 export const DEFAULT_MAX_BUFFERED_EVENTS = 200;
 
+/**
+ * Module-level defaults so their identity is stable across renders: the
+ * effects and callbacks below depend on them, and a fresh function per
+ * render would re-run recovery on every state change, closing the very
+ * session being recorded.
+ */
+const isoNow = (): string => new Date().toISOString();
+const ignoreErrors = (_context: string, _error: unknown): void => undefined;
+
 const SessionRecorderContext = createContext<SessionRecorder | undefined>(undefined);
 
 /**
@@ -73,8 +82,8 @@ export function SessionRecorderProvider({
   repository,
   flushIntervalMs = DEFAULT_SESSION_FLUSH_INTERVAL_MS,
   maxBufferedEvents = DEFAULT_MAX_BUFFERED_EVENTS,
-  now = () => new Date().toISOString(),
-  onError = () => undefined,
+  now = isoNow,
+  onError = ignoreErrors,
   children,
 }: PropsWithChildren<SessionRecorderProviderProps>): React.JSX.Element {
   const bus = useActivityBus();
