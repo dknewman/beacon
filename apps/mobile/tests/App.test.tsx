@@ -1383,3 +1383,73 @@ describe('App (notifications)', () => {
     expect(subscribeButton()).toBeEnabled();
   });
 });
+
+describe('App (parsed values)', () => {
+  it('shows the parsed reading of a read value and hides it for raw bytes', async () => {
+    const client = await openCharacteristic('2A00');
+    await fireEvent.press(screen.getByTestId('characteristic-read'));
+    await act(async () => {
+      client.resolveRead([0x51, 0x4e, 0x2d, 0xc3, 0xa9]);
+    });
+    expect(screen.getByTestId('parsed-label')).toHaveTextContent('Device name');
+    expect(screen.getByTestId('parsed-summary')).toHaveTextContent('QN-é');
+    expect(screen.getByTestId('parsed-field-0')).toHaveTextContent('QN-é');
+    expect(screen.queryByTestId('parsed-error')).toBeNull();
+    expect(screen.getByTestId('packet-0-parsed')).toHaveTextContent('QN-é');
+    expect(
+      screen.getByLabelText(/Incoming at .*, 5 bytes: 51 4E 2D C3 A9, QN-é/),
+    ).toBeOnTheScreen();
+  });
+
+  it('parses notifications as they stream in and explains a value it cannot parse', async () => {
+    jest.useFakeTimers();
+    try {
+      const client = await openCharacteristic('2A37');
+      await fireEvent.press(subscribeButton());
+      await act(async () => {
+        client.resolveSetNotify();
+      });
+      await act(async () => {
+        client.emitValue(
+          'scale',
+          HEART_RATE,
+          HR_MEASUREMENT,
+          [0x1e, 80, 0x10, 0x00, 0x4a, 0x03],
+        );
+        jest.advanceTimersByTime(100);
+      });
+      expect(screen.getByTestId('parsed-label')).toHaveTextContent('Heart rate');
+      expect(screen.getByTestId('parsed-summary')).toHaveTextContent('80 bpm');
+      expect(screen.getByTestId('parsed-field-1')).toHaveTextContent('Detected');
+      expect(screen.getByTestId('parsed-field-2')).toHaveTextContent('16 kJ');
+      expect(screen.getByTestId('parsed-field-3')).toHaveTextContent('822.3 ms');
+      expect(screen.getByTestId('packet-0-parsed')).toHaveTextContent('80 bpm');
+
+      await act(async () => {
+        client.emitValue('scale', HEART_RATE, HR_MEASUREMENT, [0x01, 0x2c]);
+        jest.advanceTimersByTime(100);
+      });
+      expect(screen.getByTestId('parsed-label')).toHaveTextContent('Raw bytes');
+      expect(screen.getByTestId('parsed-summary')).toHaveTextContent('01 2C');
+      expect(screen.getByTestId('parsed-error')).toHaveTextContent(
+        /heart-rate-measurement could not parse this value: Missing heart rate/,
+      );
+      expect(screen.queryByTestId('packet-0-parsed')).toBeNull();
+      expect(screen.getByTestId('packet-1-parsed')).toHaveTextContent('80 bpm');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('shows nothing parsed for a write to a control point', async () => {
+    const client = await openCharacteristic('2A39');
+    await fireEvent.changeText(screen.getByTestId('write-input'), '01');
+    await fireEvent.press(screen.getByTestId('write-with-response'));
+    await act(async () => {
+      client.resolveWrite();
+    });
+    expect(screen.getByTestId('value-hex')).toHaveTextContent('01');
+    expect(screen.queryByTestId('parsed')).toBeNull();
+    expect(screen.queryByTestId('packet-0-parsed')).toBeNull();
+  });
+});

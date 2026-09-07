@@ -7,3 +7,4 @@ export * from './schemas/errors';
 export * from './schemas/device';
 export * from './schemas/gatt';
 export * from './schemas/native-events';
+export * from './schemas/parsed-value';

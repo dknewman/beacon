@@ -4,6 +4,7 @@ module.exports = {
     '<rootDir>/apps/mobile',
     '<rootDir>/packages/ble-contracts',
     '<rootDir>/packages/validation',
+    '<rootDir>/packages/protocol-parsers',
   ],
   collectCoverageFrom: [
     'apps/*/src/**/*.{ts,tsx}',
