@@ -46,4 +46,34 @@ final class GattMapperTests: XCTestCase {
     XCTAssertEqual(characteristics?.count, 1)
     XCTAssertEqual(characteristics?.first?["properties"] as? [String], ["read", "notify"])
   }
+
+  func testCanonicalUuidMatchesTheTypeScriptNormalizeUuid() {
+    let battery = "0000180F-0000-1000-8000-00805F9B34FB"
+    XCTAssertEqual(GattMapper.canonicalUuid("180F"), battery)
+    XCTAssertEqual(GattMapper.canonicalUuid("180f"), battery)
+    XCTAssertEqual(GattMapper.canonicalUuid("0x180F"), battery)
+    XCTAssertEqual(GattMapper.canonicalUuid("0000180F"), battery)
+    XCTAssertEqual(GattMapper.canonicalUuid(" 0000180f-0000-1000-8000-00805f9b34fb "), battery)
+    XCTAssertEqual(GattMapper.canonicalUuid(battery), battery)
+    XCTAssertEqual(
+      GattMapper.canonicalUuid("6e400001b5a3f393e0a9e50e24dcca9e"),
+      "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
+    )
+  }
+
+  func testCanonicalUuidAgreesWithCoreBluetoothRendering() {
+    XCTAssertEqual(GattMapper.canonicalUuid(CBUUID(string: "180F").uuidString), GattMapper.canonicalUuid("180F"))
+    XCTAssertEqual(
+      GattMapper.canonicalUuid(CBUUID(string: "6E400001-B5A3-F393-E0A9-E50E24DCCA9E").uuidString),
+      "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
+    )
+  }
+
+  func testCanonicalUuidRejectsAnythingThatIsNotAUuid() {
+    XCTAssertNil(GattMapper.canonicalUuid(""))
+    XCTAssertNil(GattMapper.canonicalUuid("battery"))
+    XCTAssertNil(GattMapper.canonicalUuid("180G"))
+    XCTAssertNil(GattMapper.canonicalUuid("0000180F-0000-1000-8000-00805F9B34F"))
+    XCTAssertNil(GattMapper.canonicalUuid("0000180F0000-1000-8000-00805F9B34FB"))
+  }
 }

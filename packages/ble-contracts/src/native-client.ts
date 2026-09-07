@@ -88,15 +88,27 @@ export interface GattDiscoveryApi {
   discoverServices(deviceId: string): Promise<GattService[]>;
 }
 
-export interface GattApi extends GattDiscoveryApi {
+/**
+ * Reads and writes (M5). Native serializes GATT operations per peripheral
+ * (PROJECT.md 29); a call rejects with `disconnected` when there is no ready
+ * link, `characteristic_not_found` when the table has no such characteristic,
+ * and `read_failed` / `write_failed` with the platform status otherwise.
+ */
+export interface GattValueApi {
   readCharacteristic(
     deviceId: string,
     serviceUuid: string,
     characteristicUuid: string,
   ): Promise<number[]>;
   writeCharacteristic(request: WriteCharacteristicRequest): Promise<void>;
+}
+
+/** Notifications and indications (M6). */
+export interface GattNotifyApi {
   setNotify(request: NotificationRequest): Promise<void>;
 }
+
+export interface GattApi extends GattDiscoveryApi, GattValueApi, GattNotifyApi {}
 
 export interface NativeBleClient
   extends BluetoothAdapterApi, PermissionApi, ScanApi, ConnectionApi, GattApi {}

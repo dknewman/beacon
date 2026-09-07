@@ -269,6 +269,88 @@ public final class BluetoothManager: NSObject {
     }
   }
 
+  // MARK: - Characteristic reads and writes
+
+  /// Reads a characteristic value. Completes with the unsigned bytes, or a `BleError.payload`
+  /// (`disconnected`, `characteristic_not_found`, `read_failed`). Runs behind the peripheral's
+  /// other GATT operations; CoreBluetooth answers through `didUpdateValueFor`.
+  @objc public func readCharacteristic(
+    _ deviceId: String,
+    serviceUuid: String,
+    characteristicUuid: String,
+    completion: @escaping ([NSNumber]?, [String: Any]?) -> Void
+  ) {
+    queue.async { [self] in
+      let target: GattTarget
+      switch resolveCharacteristic(deviceId: deviceId, serviceUuid: serviceUuid, characteristicUuid: characteristicUuid) {
+      case .success(let resolved):
+        target = resolved
+      case .failure(let error):
+        completion(nil, error.payload)
+        return
+      }
+      let characteristic = target.characteristic
+      guard characteristic.properties.contains(.read) else {
+        completion(nil, propertyError(code: .readFailed, message: "Read not permitted").payload)
+        return
+      }
+      target.session.enqueue(label: "read \(characteristicUuid)", cancel: { completion(nil, $0.payload) }) { session in
+        session.pendingRead = (characteristic, completion)
+        session.peripheral.readValue(for: characteristic)
+        return true
+      }
+    }
+  }
+
+  /// Writes unsigned bytes to a characteristic. Completes with `nil` on success or a
+  /// `BleError.payload` (`invalid_payload`, `disconnected`, `characteristic_not_found`,
+  /// `write_failed`). With `withResponse` the completion waits for the peripheral's
+  /// acknowledgement; without it the bytes are handed to the stack and the call completes.
+  @objc public func writeCharacteristic(
+    _ deviceId: String,
+    serviceUuid: String,
+    characteristicUuid: String,
+    bytes: [NSNumber],
+    withResponse: Bool,
+    completion: @escaping ([String: Any]?) -> Void
+  ) {
+    queue.async { [self] in
+      guard let payload = ByteArrayMapper.bytes(from: bytes) else {
+        completion(BleError(code: .invalidPayload, message: "Bytes must be whole numbers between 0 and 255").payload)
+        return
+      }
+      let target: GattTarget
+      switch resolveCharacteristic(deviceId: deviceId, serviceUuid: serviceUuid, characteristicUuid: characteristicUuid) {
+      case .success(let resolved):
+        target = resolved
+      case .failure(let error):
+        completion(error.payload)
+        return
+      }
+      let characteristic = target.characteristic
+      let required: CBCharacteristicProperties = withResponse ? .write : .writeWithoutResponse
+      guard characteristic.properties.contains(required) else {
+        completion(propertyError(code: .writeFailed, message: "Write not permitted").payload)
+        return
+      }
+      let data = Data(payload)
+      target.session.enqueue(label: "write \(characteristicUuid)", cancel: { completion($0.payload) }) { session in
+        if withResponse {
+          session.pendingWrite = (characteristic, completion)
+          session.peripheral.writeValue(data, for: characteristic, type: .withResponse)
+          return true
+        }
+        // CoreBluetooth sends no callback for this write type, so the operation is over as
+        // soon as the bytes are handed to the stack and the queue may move on at once.
+        // `canSendWriteWithoutResponse` back-pressure is not observed yet: a burst that
+        // overruns the stack's buffer is dropped by CoreBluetooth rather than reported here.
+        session.peripheral.writeValue(data, for: characteristic, type: .withoutResponse)
+        completion(nil)
+        return false
+      }
+    }
+  }
+
   // MARK: - Lifecycle
 
   /// Releases CoreBluetooth resources. Called when the React instance is torn down.
@@ -276,14 +358,16 @@ public final class BluetoothManager: NSObject {
     queue.async { [self] in
       isInvalidated = true
       endScan()
+      let invalidated = BleError(code: .disconnected, message: "Bluetooth module invalidated")
       for session in sessions.values {
         if session.peripheral.state != .disconnected {
           central?.cancelPeripheralConnection(session.peripheral)
         }
         session.detach()
-        session.settleConnects(with: BleError(code: .disconnected, message: "Bluetooth module invalidated").payload)
+        session.settleConnects(with: invalidated.payload)
         session.settleDisconnects()
-        session.settleRssiReads(with: nil, error: BleError(code: .disconnected, message: "Bluetooth module invalidated").payload)
+        session.settleRssiReads(with: nil, error: invalidated.payload)
+        session.cancelOperations(with: invalidated)
       }
       sessions.removeAll()
       discoveredPeripherals.removeAll()
@@ -431,7 +515,9 @@ public final class BluetoothManager: NSObject {
     } else {
       session.settleConnects(with: BleError(code: .disconnected, message: "Connection cancelled").payload)
     }
-    session.settleRssiReads(with: nil, error: BleError(code: .disconnected, message: "The connection ended").payload)
+    let ended = BleError(code: .disconnected, message: "The connection ended")
+    session.settleRssiReads(with: nil, error: ended.payload)
+    session.cancelOperations(with: ended)
     session.disconnectRequested = false
     session.services = []
     session.pendingCharacteristicDiscoveries = 0
@@ -443,6 +529,37 @@ public final class BluetoothManager: NSObject {
     for session in sessions.values where session.state != .disconnected {
       finish(session, error: reason)
     }
+  }
+
+  // MARK: - Private: GATT targets
+
+  /// What a read or write addresses once its arguments have been checked.
+  private typealias GattTarget = (session: PeripheralSession, characteristic: CBCharacteristic)
+
+  /// The session and characteristic a read or write addresses, or why it cannot proceed:
+  /// `disconnected` unless the session is `ready`, `characteristic_not_found` otherwise.
+  private func resolveCharacteristic(
+    deviceId: String,
+    serviceUuid: String,
+    characteristicUuid: String
+  ) -> Result<GattTarget, BleError> {
+    guard let uuid = UUID(uuidString: deviceId), let session = sessions[uuid], session.state == .ready else {
+      return .failure(BleError(code: .disconnected, message: "Not connected to \(deviceId)"))
+    }
+    guard let characteristic = session.characteristic(serviceUuid: serviceUuid, characteristicUuid: characteristicUuid)
+    else {
+      return .failure(BleError(
+        code: .characteristicNotFound,
+        message: "No characteristic \(characteristicUuid) in service \(serviceUuid)"
+      ))
+    }
+    return .success((session, characteristic))
+  }
+
+  /// The error for an operation the characteristic's properties do not allow. The domain
+  /// tells developer mode the refusal came from the GATT table rather than the radio.
+  private func propertyError(code: BleErrorCode, message: String) -> BleError {
+    BleError(code: code, message: message, nativeDomain: "CBCharacteristicProperties")
   }
 
   // MARK: - Private: pending completions
@@ -600,6 +717,44 @@ extension BluetoothManager: PeripheralSessionOwner {
     } else {
       session.settleRssiReads(with: rssi, error: nil)
     }
+  }
+
+  func session(
+    _ session: PeripheralSession,
+    didUpdateValueFor characteristic: CBCharacteristic,
+    error: Error?
+  ) {
+    guard let pending = session.pendingRead, sameCharacteristic(pending.characteristic, characteristic) else {
+      // A value nobody asked for is a notification; subscriptions arrive with M6 and there
+      // is no listener for them yet.
+      return
+    }
+    session.pendingRead = nil
+    if let error {
+      pending.completion(nil, BleError.from(error, fallback: .readFailed).payload)
+    } else {
+      pending.completion(ByteArrayMapper.numbers(from: characteristic.value ?? Data()), nil)
+    }
+    session.operations.finish()
+  }
+
+  func session(
+    _ session: PeripheralSession,
+    didWriteValueFor characteristic: CBCharacteristic,
+    error: Error?
+  ) {
+    guard let pending = session.pendingWrite, sameCharacteristic(pending.characteristic, characteristic) else {
+      return
+    }
+    session.pendingWrite = nil
+    pending.completion(error.map { BleError.from($0, fallback: .writeFailed).payload })
+    session.operations.finish()
+  }
+
+  /// Matches a delegate callback to the in-flight operation by UUIDs rather than object
+  /// identity, so the pairing does not depend on CoreBluetooth reusing instances.
+  private func sameCharacteristic(_ expected: CBCharacteristic, _ reported: CBCharacteristic) -> Bool {
+    expected.uuid == reported.uuid && expected.service?.uuid == reported.service?.uuid
   }
 }
 

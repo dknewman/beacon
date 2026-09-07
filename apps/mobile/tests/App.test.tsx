@@ -888,6 +888,9 @@ describe('App (GATT discovery)', () => {
     expect(screen.getByTestId('characteristic-value-value')).toHaveTextContent(
       'Not read yet',
     );
+    // Notify-only: no read control and no write form until M6 adds subscriptions.
+    expect(screen.queryByTestId('characteristic-read')).toBeNull();
+    expect(screen.queryByTestId('write-form')).toBeNull();
 
     await fireEvent.press(screen.getByTestId('characteristic-back'));
     expect(screen.getByTestId('gatt-inspector')).toBeOnTheScreen();
@@ -946,5 +949,251 @@ describe('App (GATT discovery)', () => {
       client.resolveConnect();
     });
     expect(client.discoverServicesCalls).toEqual(['scale', 'scale']);
+  });
+});
+
+/** Connects, resolves the heart-rate table and opens one characteristic. */
+async function openCharacteristic(shortUuid: '2A00' | '2A39') {
+  const client = await openConnected();
+  await act(async () => {
+    client.resolveServices(heartRateTable);
+  });
+  await fireEvent.press(screen.getByTestId('inspect-gatt'));
+  await fireEvent.press(screen.getByTestId(`characteristic-${shortUuid}`));
+  expect(screen.getByTestId('characteristic-code')).toHaveTextContent(shortUuid);
+  return client;
+}
+
+const GENERIC_ACCESS = '00001800-0000-1000-8000-00805F9B34FB';
+const DEVICE_NAME = '00002A00-0000-1000-8000-00805F9B34FB';
+const HEART_RATE = '0000180D-0000-1000-8000-00805F9B34FB';
+const HR_CONTROL_POINT = '00002A39-0000-1000-8000-00805F9B34FB';
+
+describe('App (characteristic read and write)', () => {
+  it('reads a characteristic, shows every column and logs the packet', async () => {
+    const client = await openCharacteristic('2A00');
+    expect(screen.queryByTestId('write-form')).toBeNull();
+    expect(screen.getByTestId('packet-list-empty')).toBeOnTheScreen();
+
+    await fireEvent.press(screen.getByTestId('characteristic-read'));
+    expect(client.readCalls).toEqual([
+      { deviceId: 'scale', serviceUuid: GENERIC_ACCESS, characteristicUuid: DEVICE_NAME },
+    ]);
+    expect(screen.getByTestId('characteristic-read')).toHaveTextContent('Reading…');
+    expect(screen.getByTestId('characteristic-read')).toBeDisabled();
+    expect(screen.getByTestId('operation-status-value')).toHaveTextContent('Reading…');
+    // A second press while in flight must not reach native.
+    await fireEvent.press(screen.getByTestId('characteristic-read'));
+    expect(client.readCalls).toHaveLength(1);
+
+    await act(async () => {
+      client.resolveRead([0x51, 0x4e, 0x2d, 0xc3, 0xa9]);
+    });
+    expect(screen.getByTestId('characteristic-read')).toHaveTextContent('Read');
+    expect(screen.getByTestId('characteristic-read')).toBeEnabled();
+    expect(screen.getByTestId('operation-status-value')).toHaveTextContent('Read');
+    expect(screen.getByTestId('operation-status')).toHaveTextContent(/Read 5 bytes\./);
+    expect(screen.getByTestId('characteristic-value-source')).toHaveTextContent(
+      /^Read at \d\d:\d\d:\d\d\.\d\d\d · 5 bytes$/,
+    );
+    expect(screen.getByTestId('value-hex')).toHaveTextContent('51 4E 2D C3 A9');
+    expect(screen.getByTestId('value-decimal')).toHaveTextContent('81 78 45 195 169');
+    expect(screen.getByTestId('value-binary')).toHaveTextContent(
+      '01010001 01001110 00101101 11000011 10101001',
+    );
+    expect(screen.getByTestId('value-ascii')).toHaveTextContent('QN-..');
+    expect(screen.getByTestId('value-utf8')).toHaveTextContent('QN-é');
+    expect(screen.getByTestId('packet-0')).toHaveTextContent(/Incoming/);
+    expect(screen.getByTestId('packet-0-hex')).toHaveTextContent('51 4E 2D C3 A9');
+    expect(screen.queryByTestId('packet-list-empty')).toBeNull();
+
+    await act(async () => {
+      client.resolveRead([0xff]);
+    });
+    // Late duplicate resolution has nothing pending; nothing changes.
+    expect(screen.getByTestId('value-hex')).toHaveTextContent('51 4E 2D C3 A9');
+
+    await fireEvent.press(screen.getByTestId('characteristic-read'));
+    await act(async () => {
+      client.resolveRead([0xff, 0xfe]);
+    });
+    expect(screen.getByTestId('value-hex')).toHaveTextContent('FF FE');
+    expect(screen.getByTestId('value-utf8')).toHaveTextContent('Not valid UTF-8');
+    expect(screen.getByTestId('packet-list')).toHaveTextContent(/Packets \(2\)/);
+    expect(screen.getByTestId('packet-0-hex')).toHaveTextContent('FF FE');
+    expect(screen.getByTestId('packet-1-hex')).toHaveTextContent('51 4E 2D C3 A9');
+  });
+
+  it('reports a failed read with its code and keeps the previous value', async () => {
+    const client = await openCharacteristic('2A00');
+    await fireEvent.press(screen.getByTestId('characteristic-read'));
+    await act(async () => {
+      client.resolveRead([0x01]);
+    });
+    await fireEvent.press(screen.getByTestId('characteristic-read'));
+    await act(async () => {
+      client.rejectRead(
+        Object.assign(new Error('GATT status 2 (read not permitted)'), {
+          code: 'read_failed',
+        }),
+      );
+    });
+    expect(screen.getByTestId('operation-status-value')).toHaveTextContent('Read failed');
+    expect(screen.getByTestId('operation-status')).toHaveTextContent(
+      /GATT status 2 \(read not permitted\) \(read_failed\)/,
+    );
+    expect(screen.getByTestId('characteristic-read')).toBeEnabled();
+    expect(screen.getByTestId('value-hex')).toHaveTextContent('01');
+    expect(screen.getByTestId('packet-list')).toHaveTextContent(/Packets \(1\)/);
+  });
+
+  it('validates write input per mode and writes with or without response', async () => {
+    const client = await openCharacteristic('2A39');
+    expect(screen.queryByTestId('characteristic-read')).toBeNull();
+    const withResponse = () => screen.getByTestId('write-with-response');
+    const withoutResponse = () => screen.getByTestId('write-without-response');
+    const feedback = () => screen.getByTestId('write-feedback');
+
+    expect(feedback()).toHaveTextContent('Enter a value to write.');
+    expect(withResponse()).toBeDisabled();
+    expect(withoutResponse()).toBeDisabled();
+
+    await fireEvent.changeText(screen.getByTestId('write-input'), '02 9G');
+    expect(feedback()).toHaveTextContent('"G" is not a hex digit.');
+    expect(withResponse()).toBeDisabled();
+
+    await fireEvent.changeText(screen.getByTestId('write-input'), '02 9a 1c');
+    expect(feedback()).toHaveTextContent('3 bytes: 02 9A 1C');
+    expect(withResponse()).toBeEnabled();
+
+    await fireEvent.press(withResponse());
+    expect(client.writeCalls).toEqual([
+      {
+        deviceId: 'scale',
+        serviceUuid: HEART_RATE,
+        characteristicUuid: HR_CONTROL_POINT,
+        bytes: [0x02, 0x9a, 0x1c],
+        mode: 'with_response',
+      },
+    ]);
+    expect(withResponse()).toHaveTextContent('Writing…');
+    expect(withResponse()).toBeDisabled();
+    expect(withoutResponse()).toBeDisabled();
+    await act(async () => {
+      client.resolveWrite();
+    });
+    expect(screen.getByTestId('operation-status-value')).toHaveTextContent('Written');
+    expect(screen.getByTestId('operation-status')).toHaveTextContent(
+      /Wrote 3 bytes with response\./,
+    );
+    expect(screen.getByTestId('characteristic-value-source')).toHaveTextContent(
+      /^Written at/,
+    );
+    expect(screen.getByTestId('value-hex')).toHaveTextContent('02 9A 1C');
+    expect(screen.getByTestId('packet-0')).toHaveTextContent(/Outgoing/);
+    // The input keeps its text so the same value can be sent again.
+    expect(screen.getByTestId('write-input').props.value).toBe('02 9a 1c');
+
+    await fireEvent.press(screen.getByTestId('write-mode-decimal'));
+    // The text is re-parsed under the new mode rather than silently kept.
+    expect(feedback()).toHaveTextContent('"9a" is not a whole number.');
+    await fireEvent.changeText(screen.getByTestId('write-input'), '1 256');
+    expect(feedback()).toHaveTextContent('256 is above 255; each value is one byte.');
+    expect(withoutResponse()).toBeDisabled();
+    await fireEvent.changeText(screen.getByTestId('write-input'), '1 255');
+    expect(feedback()).toHaveTextContent('2 bytes: 01 FF');
+
+    await fireEvent.press(screen.getByTestId('write-mode-utf8'));
+    await fireEvent.changeText(screen.getByTestId('write-input'), 'Hi');
+    expect(feedback()).toHaveTextContent('2 bytes: 48 69');
+    await fireEvent.press(withoutResponse());
+    expect(client.writeCalls[1]).toEqual({
+      deviceId: 'scale',
+      serviceUuid: HEART_RATE,
+      characteristicUuid: HR_CONTROL_POINT,
+      bytes: [0x48, 0x69],
+      mode: 'without_response',
+    });
+    await act(async () => {
+      client.resolveWrite();
+    });
+    expect(screen.getByTestId('operation-status')).toHaveTextContent(
+      /Wrote 2 bytes without response\./,
+    );
+    expect(screen.getByTestId('value-utf8')).toHaveTextContent('Hi');
+    expect(screen.getByTestId('packet-list')).toHaveTextContent(/Packets \(2\)/);
+  });
+
+  it('reports a failed write with its code', async () => {
+    const client = await openCharacteristic('2A39');
+    await fireEvent.changeText(screen.getByTestId('write-input'), '01');
+    await fireEvent.press(screen.getByTestId('write-with-response'));
+    await act(async () => {
+      client.rejectWrite(
+        Object.assign(new Error('GATT status 3 (write not permitted)'), {
+          code: 'write_failed',
+        }),
+      );
+    });
+    expect(screen.getByTestId('operation-status-value')).toHaveTextContent(
+      'Write failed',
+    );
+    expect(screen.getByTestId('operation-status')).toHaveTextContent(/\(write_failed\)/);
+    expect(screen.getByTestId('write-with-response')).toBeEnabled();
+    expect(screen.getByTestId('characteristic-value-value')).toHaveTextContent(
+      'Not read yet',
+    );
+    expect(screen.getByTestId('packet-list-empty')).toBeOnTheScreen();
+  });
+
+  it('disables reads and writes when the link drops and keeps the packet history', async () => {
+    const client = await openCharacteristic('2A00');
+    await fireEvent.press(screen.getByTestId('characteristic-read'));
+    await act(async () => {
+      client.resolveRead([0x2a]);
+    });
+    expect(screen.queryByTestId('characteristic-hint')).toBeNull();
+
+    await act(async () => {
+      client.emit({
+        type: 'ble.error',
+        deviceId: 'scale',
+        error: { code: 'disconnected', message: 'The peripheral closed the connection' },
+      });
+      client.emit({
+        type: 'connection.state_changed',
+        deviceId: 'scale',
+        state: 'disconnected',
+      });
+    });
+    // The table is gone with the link, so the read control goes with it and the reason shows.
+    expect(screen.queryByTestId('characteristic-read')).toBeNull();
+    expect(screen.getByTestId('characteristic-properties-value')).toHaveTextContent(
+      'Not connected',
+    );
+    expect(screen.getByTestId('value-hex')).toHaveTextContent('2A');
+    expect(screen.getByTestId('packet-list')).toHaveTextContent(/Packets \(1\)/);
+  });
+
+  it('shows the reason while a read is in flight when the link drops', async () => {
+    const client = await openCharacteristic('2A00');
+    await fireEvent.press(screen.getByTestId('characteristic-read'));
+    await act(async () => {
+      client.emit({
+        type: 'ble.error',
+        deviceId: 'scale',
+        error: { code: 'disconnected', message: 'The peripheral closed the connection' },
+      });
+      client.emit({
+        type: 'connection.state_changed',
+        deviceId: 'scale',
+        state: 'disconnected',
+      });
+      client.rejectRead(
+        Object.assign(new Error('Not connected to scale'), { code: 'disconnected' }),
+      );
+    });
+    expect(screen.getByTestId('operation-status-value')).toHaveTextContent('Read failed');
+    expect(screen.getByTestId('operation-status')).toHaveTextContent(/\(disconnected\)/);
   });
 });

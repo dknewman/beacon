@@ -21,7 +21,15 @@ export interface MockPeripheral {
   advertisingIntervalMs: number;
   /** GATT table reported once connected (canonical UUIDs). */
   services: GattService[];
+  /**
+   * Initial characteristic values keyed by canonical characteristic UUID.
+   * Reads return these (writes replace them for the session); a readable
+   * characteristic without an entry reads as empty.
+   */
+  values?: Record<string, number[]>;
 }
+
+const utf8 = (text: string): number[] => Array.from(text, char => char.charCodeAt(0));
 
 export const HEART_RATE_SERVICE = '0000180D-0000-1000-8000-00805F9B34FB';
 export const BATTERY_SERVICE = '0000180F-0000-1000-8000-00805F9B34FB';
@@ -85,6 +93,15 @@ export const defaultMockPeripherals: MockPeripheral[] = [
       ]),
       battery,
     ],
+    values: {
+      [sig('2A00')]: utf8('Polar H10 1A2B3C'),
+      [sig('2A01')]: [0x41, 0x03],
+      [sig('2A29')]: utf8('Polar Electro Oy'),
+      [sig('2A24')]: utf8('H10'),
+      [sig('2A26')]: utf8('5.1.0'),
+      [sig('2A38')]: [0x01],
+      [sig('2A19')]: [0x5c],
+    },
   },
   {
     id: 'MOCK-SCALE-0002',
@@ -107,6 +124,12 @@ export const defaultMockPeripherals: MockPeripheral[] = [
       ]),
       battery,
     ],
+    values: {
+      [sig('2A00')]: utf8('QN-Scale'),
+      [sig('2A9E')]: [0x38, 0x00, 0x00, 0x00],
+      [sig('2A9B')]: [0xff, 0x0f, 0x00, 0x00],
+      [sig('2A19')]: [0x2d],
+    },
   },
   {
     id: 'MOCK-BPM-0003',
@@ -125,6 +148,13 @@ export const defaultMockPeripherals: MockPeripheral[] = [
         [sig('2A49'), ['read']],
       ]),
     ],
+    values: {
+      [sig('2A00')]: utf8('Omron HEM-7361T'),
+      [sig('2A29')]: utf8('OMRON HEALTHCARE'),
+      [sig('2A24')]: utf8('HEM-7361T'),
+      [sig('2A26')]: utf8('2.3'),
+      [sig('2A49')]: [0x1f, 0x00],
+    },
   },
   {
     id: 'MOCK-UART-0004',
@@ -141,6 +171,9 @@ export const defaultMockPeripherals: MockPeripheral[] = [
         ['6E400003-B5A3-F393-E0A9-E50E24DCCA9E', ['notify']],
       ]),
     ],
+    values: {
+      [sig('2A00')]: utf8('Nordic_UART'),
+    },
   },
   {
     id: 'MOCK-BEACON-0005',

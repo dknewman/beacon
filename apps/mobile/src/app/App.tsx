@@ -3,6 +3,7 @@ import { NavigationContainer, DarkTheme, DefaultTheme } from '@react-navigation/
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ConnectionProvider } from '../features/connection/ConnectionProvider';
 import { GattProvider } from '../features/gatt/GattProvider';
+import { PacketLogProvider } from '../features/packets/PacketLogProvider';
 import { ScanProvider } from '../features/scan/ScanProvider';
 import type { BleClient } from '../native/BleClient';
 import { BleClientProvider } from '../native/BleClientContext';
@@ -24,7 +25,9 @@ export function App({ bleClient }: AppProps): React.JSX.Element {
         <ScanProvider>
           <ConnectionProvider>
             <GattProvider>
-              <ThemedNavigation />
+              <PacketLogProvider>
+                <ThemedNavigation />
+              </PacketLogProvider>
             </GattProvider>
           </ConnectionProvider>
         </ScanProvider>
