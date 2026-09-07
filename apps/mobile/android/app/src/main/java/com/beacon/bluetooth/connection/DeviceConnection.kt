@@ -4,8 +4,8 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothProfile
-import android.bluetooth.BluetoothStatusCodes
 import android.content.Context
 import android.os.Build
 import com.beacon.bluetooth.errors.BleError
@@ -16,6 +16,8 @@ import com.beacon.bluetooth.mapping.BleUuid
 import com.beacon.bluetooth.mapping.DiscoveredService
 import com.beacon.bluetooth.mapping.GattStatusMapper
 import com.beacon.bluetooth.mapping.GattTreeMapper
+import com.beacon.bluetooth.mapping.IsoTimestamp
+import com.beacon.bluetooth.mapping.NotificationDescriptorMapper
 
 /**
  * One peripheral's connection (PROJECT.md 28, 29): owns the `BluetoothGatt`, drives the
@@ -25,9 +27,10 @@ import com.beacon.bluetooth.mapping.GattTreeMapper
  * instance lock; listeners and completions are invoked from within the guarded sections,
  * which is safe because they only forward to thread-safe bridge APIs.
  *
- * Characteristic reads and writes go through a [GattOperationQueue]: the stack accepts one
- * outstanding GATT request per link, so each waits for its predecessor's callback. When the
- * link ends, every queued and in-flight operation is settled with `disconnected`.
+ * Characteristic reads, writes and subscription changes go through a [GattOperationQueue]:
+ * the stack accepts one outstanding GATT request per link, so each waits for its
+ * predecessor's callback. When the link ends, every queued and in-flight operation is settled
+ * with `disconnected` and every subscription ends with it.
  *
  * Errors are always reported through [Listener.onError] before the `DISCONNECTED` transition
  * they cause, matching the iOS implementation and the JavaScript reducer's expectations.
@@ -40,6 +43,9 @@ class DeviceConnection(
     interface Listener {
         fun onStateChanged(address: String, state: BleConnectionState)
         fun onError(address: String, error: BleError)
+
+        /** A notification or indication; UUIDs are in wire form and [timestamp] is the receipt instant. */
+        fun onValueChanged(address: String, serviceUuid: String, characteristicUuid: String, value: ByteArray, timestamp: String)
     }
 
     val address: String = device.address
@@ -50,6 +56,10 @@ class DeviceConnection(
     /** The GATT table, available while the connection is READY. */
     var services: List<DiscoveredService> = emptyList()
         private set
+
+    /** "service/characteristic" keys (wire form) the peripheral has acknowledged a subscription for. */
+    val subscriptions: Set<String>
+        @Synchronized get() = subscribed.toSet()
 
     private var gatt: BluetoothGatt? = null
     private val pendingConnects = mutableListOf<(BleError?) -> Unit>()
@@ -67,6 +77,12 @@ class DeviceConnection(
 
     /** Completion of the in-flight write, answered by `onCharacteristicWrite`. */
     private var pendingWrite: ((BleError?) -> Unit)? = null
+
+    /** The in-flight subscription change, answered by `onDescriptorWrite`. */
+    private var pendingNotify: PendingNotify? = null
+
+    /** Backing set of [subscriptions]; kept for developer mode and cleared when the link ends. */
+    private val subscribed = HashSet<String>()
 
     /** Starts (or joins) a connection attempt; `onResult(null)` once services are discovered. */
     @Synchronized
@@ -253,6 +269,50 @@ class DeviceConnection(
         }
     }
 
+    /**
+     * Turns notifications (or indications, when that is all the characteristic offers) on or
+     * off, queued behind other GATT operations on this link. Completes once the peripheral has
+     * acknowledged the change; values then arrive through [Listener.onValueChanged]. Fails
+     * with `disconnected`, `service_not_found`, `characteristic_not_found` or
+     * `subscription_failed`.
+     */
+    @Synchronized
+    fun setNotify(serviceUuid: String, characteristicUuid: String, enabled: Boolean, onResult: (BleError?) -> Unit) {
+        val characteristic = when (val lookup = findCharacteristic(serviceUuid, characteristicUuid)) {
+            is Lookup.Failure -> {
+                onResult(lookup.error)
+                return
+            }
+            is Lookup.Found -> lookup.characteristic
+        }
+        val value = NotificationDescriptorMapper.cccdValue(characteristic.properties, enabled)
+        if (value == null) {
+            onResult(notPermitted(BleErrorCode.SUBSCRIPTION_FAILED, "Notifications not supported"))
+            return
+        }
+        val verb = if (enabled) "subscribe" else "unsubscribe"
+        enqueue(label = "$verb ${characteristic.uuid}", cancel = onResult) {
+            val active = linkedGatt()
+            if (active == null) {
+                onResult(BleError(BleErrorCode.DISCONNECTED, "Not connected to $address"))
+                return@enqueue false
+            }
+            pendingNotify = PendingNotify(characteristic, subscriptionKey(characteristic), enabled, onResult)
+            val start = try {
+                startNotify(active, characteristic, enabled, value)
+            } catch (error: SecurityException) {
+                SubscriptionStart.Rejected(error.toBleError())
+            }
+            when (start) {
+                SubscriptionStart.Pending -> true
+                is SubscriptionStart.Rejected -> {
+                    settleNotify(start.error)
+                    false
+                }
+            }
+        }
+    }
+
     /** Tears the connection down without waiting, for adapter loss and module invalidation. */
     @Synchronized
     fun drop(reason: BleError?) {
@@ -294,6 +354,18 @@ class DeviceConnection(
         BleError(code, message, nativeDomain = "android.bluetooth.BluetoothGattCharacteristic")
 
     /**
+     * The wire-form UUIDs of a characteristic from the discovered table, which always carries
+     * the service it was found under.
+     */
+    private fun wireUuids(characteristic: BluetoothGattCharacteristic): Pair<String, String> =
+        BleUuid.format(characteristic.service.uuid) to BleUuid.format(characteristic.uuid)
+
+    private fun subscriptionKey(characteristic: BluetoothGattCharacteristic): String {
+        val (serviceUuid, characteristicUuid) = wireUuids(characteristic)
+        return "$serviceUuid/$characteristicUuid"
+    }
+
+    /**
      * Queues [start] behind the operations already waiting on this link. [cancel] settles the
      * caller when the link ends before the operation starts; once started, the operation's own
      * pending completion is settled instead.
@@ -322,23 +394,7 @@ class DeviceConnection(
     ): BleError? {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val status = active.writeCharacteristic(characteristic, bytes, writeType)
-            return when (status) {
-                BluetoothStatusCodes.SUCCESS -> null
-                BluetoothStatusCodes.ERROR_MISSING_BLUETOOTH_CONNECT_PERMISSION ->
-                    BleError(
-                        BleErrorCode.PERMISSION_DENIED,
-                        "Missing Bluetooth permission",
-                        nativeCode = status.toString(),
-                        nativeDomain = "android.bluetooth.BluetoothStatusCodes",
-                    )
-                else ->
-                    BleError(
-                        BleErrorCode.WRITE_FAILED,
-                        "The Bluetooth stack rejected the write (status $status)",
-                        nativeCode = status.toString(),
-                        nativeDomain = "android.bluetooth.BluetoothStatusCodes",
-                    )
-            }
+            return GattStatusMapper.requestRejection(BleErrorCode.WRITE_FAILED, "write", status)
         }
         @Suppress("DEPRECATION")
         val accepted = run {
@@ -347,6 +403,79 @@ class DeviceConnection(
             active.writeCharacteristic(characteristic)
         }
         return if (accepted) null else BleError(BleErrorCode.WRITE_FAILED, "The Bluetooth stack rejected the write")
+    }
+
+    /** A subscription change in flight: what it targets, which way it switches, who waits. */
+    private class PendingNotify(
+        val characteristic: BluetoothGattCharacteristic,
+        val key: String,
+        val enabled: Boolean,
+        val completion: (BleError?) -> Unit,
+    )
+
+    private sealed interface SubscriptionStart {
+        /** The descriptor write is in flight; `onDescriptorWrite` completes the change. */
+        object Pending : SubscriptionStart
+
+        class Rejected(val error: BleError) : SubscriptionStart
+    }
+
+    /**
+     * Hands a subscription change to the stack. Delivery is switched locally first (the stack
+     * discards notifications for characteristics it was not told about), then the Client
+     * Characteristic Configuration descriptor is written with [value] so the peripheral
+     * starts or stops sending. A characteristic that advertises notify or indicate without
+     * that descriptor cannot be configured remotely; the change is refused up front, as
+     * CoreBluetooth refuses it on iOS, rather than reported as a subscription that never
+     * delivers. Android 13 reports acceptance of the descriptor write as a status code;
+     * earlier releases take the value from the descriptor itself.
+     */
+    private fun startNotify(
+        active: BluetoothGatt,
+        characteristic: BluetoothGattCharacteristic,
+        enabled: Boolean,
+        value: ByteArray,
+    ): SubscriptionStart {
+        if (!active.setCharacteristicNotification(characteristic, enabled)) {
+            return SubscriptionStart.Rejected(stackRejectedSubscription())
+        }
+        val descriptor = characteristic.getDescriptor(NotificationDescriptorMapper.CCCD_UUID)
+        if (descriptor == null) {
+            setLocalDelivery(active, characteristic, !enabled)
+            return SubscriptionStart.Rejected(
+                notPermitted(
+                    BleErrorCode.SUBSCRIPTION_FAILED,
+                    "The characteristic has no client characteristic configuration descriptor",
+                ),
+            )
+        }
+        val rejection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val status = active.writeDescriptor(descriptor, value)
+            GattStatusMapper.requestRejection(BleErrorCode.SUBSCRIPTION_FAILED, "subscription", status)
+        } else {
+            @Suppress("DEPRECATION")
+            val accepted = run {
+                descriptor.value = value
+                active.writeDescriptor(descriptor)
+            }
+            if (accepted) null else stackRejectedSubscription()
+        }
+        if (rejection == null) return SubscriptionStart.Pending
+        // The peripheral was never told, so the local switch goes back to match it.
+        setLocalDelivery(active, characteristic, !enabled)
+        return SubscriptionStart.Rejected(rejection)
+    }
+
+    private fun stackRejectedSubscription(): BleError =
+        BleError(BleErrorCode.SUBSCRIPTION_FAILED, "The Bluetooth stack rejected the subscription")
+
+    /** Flips the stack's local delivery switch to undo a half-applied change; a refusal is ignored. */
+    private fun setLocalDelivery(active: BluetoothGatt, characteristic: BluetoothGattCharacteristic, enabled: Boolean) {
+        try {
+            active.setCharacteristicNotification(characteristic, enabled)
+        } catch (_: SecurityException) {
+            // Permission revoked mid-session: the link is about to end and takes the switch with it.
+        }
     }
 
     private fun settleRead(result: Result<ByteArray>) {
@@ -361,11 +490,22 @@ class DeviceConnection(
         completion(error)
     }
 
+    /** Settles the in-flight subscription change; success records (or forgets) the subscription. */
+    private fun settleNotify(error: BleError?) {
+        val pending = pendingNotify ?: return
+        pendingNotify = null
+        if (error == null) {
+            if (pending.enabled) subscribed += pending.key else subscribed -= pending.key
+        }
+        pending.completion(error)
+    }
+
     /** Fails the in-flight operation and every queued one; the link is gone. */
     private fun cancelOperations(error: BleError) {
         val cancelled = operations.cancelAll()
         settleRead(Result.failure(error))
         settleWrite(error)
+        settleNotify(error)
         cancelled.forEach { operation -> cancellations.remove(operation)?.invoke(error) }
     }
 
@@ -390,6 +530,8 @@ class DeviceConnection(
         cancelOperations(BleError(BleErrorCode.DISCONNECTED, "The connection ended"))
         disconnectRequested = false
         services = emptyList()
+        // The peripheral forgets every client configuration with the link, so no subscription survives it.
+        subscribed.clear()
         setState(BleConnectionState.DISCONNECTED)
         val waiters = pendingDisconnects.toList()
         pendingDisconnects.clear()
@@ -528,11 +670,43 @@ class DeviceConnection(
             }
         }
 
+        /** The peripheral's answer to a Client Characteristic Configuration write. */
+        override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+            synchronized(this@DeviceConnection) {
+                if (gatt !== this@DeviceConnection.gatt) return
+                val pending = pendingNotify ?: return
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    settleNotify(null)
+                } else {
+                    // The peripheral refused the change, so the local switch goes back to match it.
+                    setLocalDelivery(gatt, pending.characteristic, !pending.enabled)
+                    settleNotify(GattStatusMapper.operationFailure(BleErrorCode.SUBSCRIPTION_FAILED, "Subscription change", status))
+                }
+                operations.finish()
+            }
+        }
+
+        /** Android 13 and later deliver the value alongside the characteristic. */
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray,
+        ) {
+            handleChanged(gatt, characteristic, value)
+        }
+
+        /** Earlier releases deliver only the characteristic, whose value holds the bytes. */
+        @Deprecated("Superseded on Android 13 by the overload carrying the value")
+        @Suppress("DEPRECATION")
+        override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
+            handleChanged(gatt, characteristic, characteristic.value ?: ByteArray(0))
+        }
+
         private fun handleRead(gatt: BluetoothGatt, value: ByteArray, status: Int) {
             synchronized(this@DeviceConnection) {
                 if (gatt !== this@DeviceConnection.gatt) return
                 // With no read in flight this is a value update from a subscription, which
-                // notifications (M6) handle through onCharacteristicChanged rather than here.
+                // arrives through onCharacteristicChanged rather than here.
                 if (pendingRead == null) return
                 if (status == BluetoothGatt.GATT_SUCCESS) {
                     settleRead(Result.success(value))
@@ -540,6 +714,22 @@ class DeviceConnection(
                     settleRead(Result.failure(GattStatusMapper.operationFailure(BleErrorCode.READ_FAILED, "Characteristic read", status)))
                 }
                 operations.finish()
+            }
+        }
+
+        /**
+         * Forwards a notification or indication. The timestamp is taken on receipt, before the
+         * lock and the bridge hop, so a burst keeps its order and spacing. The listener is
+         * called from within the guarded section like every other listener call here, which
+         * also guarantees that no value is reported after the `DISCONNECTED` transition of
+         * the link it came from.
+         */
+        private fun handleChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
+            val timestamp = IsoTimestamp.format(System.currentTimeMillis())
+            synchronized(this@DeviceConnection) {
+                if (gatt !== this@DeviceConnection.gatt) return
+                val (serviceUuid, characteristicUuid) = wireUuids(characteristic)
+                listener.onValueChanged(address, serviceUuid, characteristicUuid, value, timestamp)
             }
         }
     }

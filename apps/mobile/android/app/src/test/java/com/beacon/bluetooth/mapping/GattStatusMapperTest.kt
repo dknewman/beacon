@@ -1,8 +1,10 @@
 package com.beacon.bluetooth.mapping
 
 import android.bluetooth.BluetoothGatt
+import android.bluetooth.BluetoothStatusCodes
 import com.beacon.bluetooth.errors.BleErrorCode
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -49,5 +51,43 @@ class GattStatusMapperTest {
         assertEquals(BleErrorCode.WRITE_FAILED, write.code)
         assertEquals("Characteristic write failed (status 3)", write.message)
         assertEquals("3", write.nativeCode)
+    }
+
+    @Test
+    fun `a refused subscription change keeps its own code and the peripheral's status`() {
+        val error = GattStatusMapper.operationFailure(
+            BleErrorCode.SUBSCRIPTION_FAILED,
+            "Subscription change",
+            BluetoothGatt.GATT_INSUFFICIENT_AUTHENTICATION,
+        )
+        assertEquals(BleErrorCode.SUBSCRIPTION_FAILED, error.code)
+        assertEquals("Subscription change failed (status 5)", error.message)
+        assertEquals("5", error.nativeCode)
+        assertEquals("android.bluetooth.BluetoothGatt", error.nativeDomain)
+    }
+
+    @Test
+    fun `request status codes distinguish acceptance, missing permission and rejection`() {
+        assertNull(GattStatusMapper.requestRejection(BleErrorCode.WRITE_FAILED, "write", BluetoothStatusCodes.SUCCESS))
+
+        val denied = GattStatusMapper.requestRejection(
+            BleErrorCode.WRITE_FAILED,
+            "write",
+            BluetoothStatusCodes.ERROR_MISSING_BLUETOOTH_CONNECT_PERMISSION,
+        )!!
+        assertEquals(BleErrorCode.PERMISSION_DENIED, denied.code)
+        assertEquals("Missing Bluetooth permission", denied.message)
+        assertEquals("6", denied.nativeCode)
+        assertEquals("android.bluetooth.BluetoothStatusCodes", denied.nativeDomain)
+
+        val busy = GattStatusMapper.requestRejection(
+            BleErrorCode.SUBSCRIPTION_FAILED,
+            "subscription",
+            BluetoothStatusCodes.ERROR_GATT_WRITE_REQUEST_BUSY,
+        )!!
+        assertEquals(BleErrorCode.SUBSCRIPTION_FAILED, busy.code)
+        assertEquals("The Bluetooth stack rejected the subscription (status 201)", busy.message)
+        assertEquals("201", busy.nativeCode)
+        assertEquals("android.bluetooth.BluetoothStatusCodes", busy.nativeDomain)
     }
 }

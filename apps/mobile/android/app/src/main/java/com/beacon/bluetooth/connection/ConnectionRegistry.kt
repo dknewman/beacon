@@ -103,6 +103,22 @@ class ConnectionRegistry(
         connection.writeCharacteristic(serviceUuid, characteristicUuid, bytes, withResponse, onResult)
     }
 
+    @Synchronized
+    fun setNotify(
+        deviceId: String,
+        serviceUuid: String,
+        characteristicUuid: String,
+        enabled: Boolean,
+        onResult: (BleError?) -> Unit,
+    ) {
+        val connection = connections[deviceId]
+        if (connection == null) {
+            onResult(BleError(BleErrorCode.DISCONNECTED, "Not connected to $deviceId"))
+            return
+        }
+        connection.setNotify(serviceUuid, characteristicUuid, enabled, onResult)
+    }
+
     /** Ends every connection; the platform has already dropped them when the radio goes away. */
     @Synchronized
     fun dropAll(reason: BleError?) {
