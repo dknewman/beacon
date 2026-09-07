@@ -1,10 +1,20 @@
 package com.beacon.bluetooth.mapping
 
+import java.util.UUID
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
 class BleUuidTest {
+
+    @Test
+    fun `formats platform UUIDs in the uppercase hyphenated wire form`() {
+        assertEquals(
+            "6E400001-B5A3-F393-E0A9-E50E24DCCA9E",
+            BleUuid.format(UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e")),
+        )
+        assertEquals("0000180D-0000-1000-8000-00805F9B34FB", BleUuid.format(BleUuid.parse("180d")!!))
+    }
 
     @Test
     fun `expands short and medium forms with the Bluetooth base UUID`() {

@@ -149,6 +149,18 @@ class BeaconBluetoothModule(reactContext: ReactApplicationContext) :
         }
     }
 
+    override fun setNotify(
+        deviceId: String,
+        serviceUuid: String,
+        characteristicUuid: String,
+        enabled: Boolean,
+        promise: Promise,
+    ) {
+        connections.setNotify(deviceId, serviceUuid, characteristicUuid, enabled) { error ->
+            if (error == null) promise.resolve(null) else promise.rejectWith(error)
+        }
+    }
+
     override fun onAdapterStateChanged(state: BleAdapterState) {
         // The emitter callback is bound by the TurboModule infrastructure once JavaScript
         // has resolved this module. Broadcasts before that have no subscriber to reach;
@@ -184,6 +196,24 @@ class BeaconBluetoothModule(reactContext: ReactApplicationContext) :
 
     override fun onError(address: String, error: BleError) {
         emitError(deviceId = address, error = error)
+    }
+
+    override fun onValueChanged(
+        address: String,
+        serviceUuid: String,
+        characteristicUuid: String,
+        value: ByteArray,
+        timestamp: String,
+    ) {
+        if (mEventEmitterCallback == null) return
+        val payload = Arguments.createMap().apply {
+            putString("deviceId", address)
+            putString("serviceUuid", serviceUuid)
+            putString("characteristicUuid", characteristicUuid)
+            putArray("bytes", value.toWritableArray())
+            putString("timestamp", timestamp)
+        }
+        emitOnCharacteristicValueChanged(payload)
     }
 
     private fun emitError(deviceId: String?, error: BleError) {

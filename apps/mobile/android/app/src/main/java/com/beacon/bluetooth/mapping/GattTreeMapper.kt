@@ -42,14 +42,14 @@ object GattTreeMapper {
 
     fun characteristic(serviceUuid: UUID, uuid: UUID, propertyMask: Int): DiscoveredCharacteristic =
         DiscoveredCharacteristic(
-            serviceUuid = serviceUuid.toString().uppercase(),
-            uuid = uuid.toString().uppercase(),
+            serviceUuid = BleUuid.format(serviceUuid),
+            uuid = BleUuid.format(uuid),
             properties = properties(propertyMask),
         )
 
     fun service(uuid: UUID, primary: Boolean, characteristics: List<Pair<UUID, Int>>): DiscoveredService =
         DiscoveredService(
-            uuid = uuid.toString().uppercase(),
+            uuid = BleUuid.format(uuid),
             primary = primary,
             characteristics = characteristics.map { (characteristicUuid, mask) ->
                 characteristic(uuid, characteristicUuid, mask)
