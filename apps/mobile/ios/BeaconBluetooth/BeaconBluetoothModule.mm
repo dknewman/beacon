@@ -139,6 +139,54 @@
                       }];
 }
 
+- (void)readCharacteristic:(NSString *)deviceId
+               serviceUuid:(NSString *)serviceUuid
+        characteristicUuid:(NSString *)characteristicUuid
+                   resolve:(RCTPromiseResolveBlock)resolve
+                    reject:(RCTPromiseRejectBlock)reject
+{
+  [self.manager readCharacteristic:deviceId
+                       serviceUuid:serviceUuid
+                characteristicUuid:characteristicUuid
+                        completion:^(NSArray<NSNumber *> *bytes, NSDictionary<NSString *, id> *error) {
+                          if (error != nil) {
+                            [BeaconBluetoothModule settle:error resolve:resolve reject:reject];
+                          } else {
+                            resolve(bytes);
+                          }
+                        }];
+}
+
+- (void)writeCharacteristic:(NSString *)deviceId
+                serviceUuid:(NSString *)serviceUuid
+         characteristicUuid:(NSString *)characteristicUuid
+                      bytes:(NSArray *)bytes
+               withResponse:(BOOL)withResponse
+                    resolve:(RCTPromiseResolveBlock)resolve
+                     reject:(RCTPromiseRejectBlock)reject
+{
+  // Unlike a scan filter, a payload with an element dropped would be a different message, so
+  // anything that is not a number rejects the whole write instead of being skipped.
+  NSMutableArray<NSNumber *> *values = [NSMutableArray arrayWithCapacity:bytes.count];
+  for (id value in bytes) {
+    if (![value isKindOfClass:[NSNumber class]]) {
+      [BeaconBluetoothModule settle:@{@"code" : @"invalid_payload", @"message" : @"Bytes must be numbers"}
+                            resolve:resolve
+                             reject:reject];
+      return;
+    }
+    [values addObject:value];
+  }
+  [self.manager writeCharacteristic:deviceId
+                        serviceUuid:serviceUuid
+                 characteristicUuid:characteristicUuid
+                              bytes:values
+                       withResponse:withResponse
+                         completion:^(NSDictionary<NSString *, id> *error) {
+                           [BeaconBluetoothModule settle:error resolve:resolve reject:reject];
+                         }];
+}
+
 /// Resolves a void promise, or rejects it with the contract `code` and message from a
 /// `BleError.payload` dictionary so JavaScript's `toBleError` can read the code.
 + (void)settle:(NSDictionary<NSString *, id> *)error

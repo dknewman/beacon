@@ -8,8 +8,9 @@ import Foundation
 /// the owner calls `finish()` from the matching delegate callback. Unit tested.
 final class GattOperationQueue {
 
-  /// An operation: `start` performs the platform call. Returning false means it failed to
-  /// start (the owner has already settled its completion) and the queue moves on.
+  /// An operation: `start` performs the platform call. Returning false means nothing is left
+  /// in flight, because the call failed to start or completed synchronously; the owner has
+  /// already settled its completion and the queue moves on.
   struct Operation {
     let label: String
     let start: () -> Bool
