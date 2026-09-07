@@ -2,14 +2,15 @@
 
 ## Layers and tools
 
-| Layer                                        | Tool                                                         | Location                               |
-| -------------------------------------------- | ------------------------------------------------------------ | -------------------------------------- |
-| Shared TypeScript packages                   | Jest (node environment)                                      | `packages/*/src/__tests__`             |
-| App logic (reducers, labels, bridge wrapper) | Jest + `@react-native/jest-preset`                           | `apps/mobile/src/**/__tests__`         |
-| Component / integration                      | React Native Testing Library 14, real React Navigation stack | `apps/mobile/tests`                    |
-| Swift                                        | XCTest (`BeaconBluetoothTests` target)                       | `apps/mobile/ios/BeaconBluetoothTests` |
-| Kotlin                                       | JUnit 4 (`testDebugUnitTest`)                                | `apps/mobile/android/app/src/test`     |
-| End to end                                   | Maestro or Detox (planned, M11+)                             |                                        |
+| Layer                                        | Tool                                                         | Location                                                                           |
+| -------------------------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
+| Shared TypeScript packages                   | Jest (node environment)                                      | `packages/*/src/__tests__`                                                         |
+| App logic (reducers, labels, bridge wrapper) | Jest + `@react-native/jest-preset`                           | `apps/mobile/src/**/__tests__`                                                     |
+| SQL and migrations                           | Jest + sql.js (SQLite in process, no native module)          | `apps/mobile/src/storage/__tests__`, `apps/mobile/src/features/sessions/__tests__` |
+| Component / integration                      | React Native Testing Library 14, real React Navigation stack | `apps/mobile/tests`                                                                |
+| Swift                                        | XCTest (`BeaconBluetoothTests` target)                       | `apps/mobile/ios/BeaconBluetoothTests`                                             |
+| Kotlin                                       | JUnit 4 (`testDebugUnitTest`)                                | `apps/mobile/android/app/src/test`                                                 |
+| End to end                                   | Maestro or Detox (planned, M11+)                             |                                                                                    |
 
 Run everything JavaScript from the repo root: `yarn validate` (typecheck, lint, format check,
 tests).
@@ -39,6 +40,13 @@ tests).
 - Native logic that can be pure is written pure and tested: the `GattOperationQueue` has no
   CoreBluetooth or Android dependency, so its ordering, failed-start and cancellation behavior
   is asserted in XCTest and JUnit; only the owners that call the platform are left to hardware.
+- Storage is tested against a real SQLite engine, not a fake of one. `tests/fakes/SqlJsDatabase.ts`
+  implements the app's `SqlDatabase` interface over `sql.js` (SQLite compiled to WebAssembly,
+  a root dev dependency), so the migrations and every statement the SQLite repository runs
+  are executed under Jest exactly as they are on the device; only the op-sqlite binding is
+  tested against a hand-written connection. Anything that stores sessions runs one contract
+  suite (`sessionRepository.contract.ts`) against every implementation, so the in-memory
+  repository the `App` tests use and the SQLite one the app ships cannot disagree.
 
 ## Read and write coverage (M5)
 
@@ -88,6 +96,35 @@ pure TypeScript with no native change, so there are no new XCTest or JUnit suite
 | `apps/mobile/src/features/parsers/__tests__/parsePacket.test.ts`                                     | The packet's UUIDs used as the context, the raw fallback hidden, a failed parse kept with its reason and the raw stand-in, fields formatted with their unit and booleans as words                                                                                                                                                                                                                                                                                                              |
 | `apps/mobile/tests/App.test.tsx` ("parsed values")                                                   | A read Device Name shown with label, summary, field and row summary (also in the accessibility label); heart rate notifications parsed as they stream in through the 100 ms flush, then a value the parser cannot read shown as raw with the parser and reason named and the earlier row keeping its summary; a write to a control point showing nothing parsed                                                                                                                                |
 | `apps/mobile/src/mock/__tests__/createMockBleClient.test.ts` ("scripts every default notifier so …") | Every scripted notifier of every default mock peripheral, over several sequence numbers, parsing with a non-raw parser, so the mock environment and the parsers cannot drift apart                                                                                                                                                                                                                                                                                                             |
+
+## Session recording coverage (M8)
+
+M8 adds the first native dependency that is not the Bluetooth module,
+`@op-engineering/op-sqlite`, and the first tests that run SQL. The SQL runs under Jest
+through `sql.js`; the op-sqlite binding is exercised against a fake connection and compiled
+by CI's Android and iOS jobs, and nothing about it has been observed on a device. The
+recorder provider tests render the provider with `renderHook`, a scripted clock, a 5 ms
+flush interval and a 3-event buffer, and wait for the repository rather than the timer, so
+the batching and the ordering are asserted against what was stored.
+
+| Suite                                                                             | Covers                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/mobile/src/storage/__tests__/migrations.test.ts`                            | A fresh database brought to the latest `user_version` with `sessions` and `session_events` created, running again applying nothing; only the migrations above the current version applied, in order; a migration failing midway rolled back with the version untouched; duplicate versions rejected                                                                                                                                                                       |
+| `apps/mobile/src/storage/__tests__/createOpSqliteDatabase.test.ts`                | Statements forwarded with their parameters (an empty list when none), rows returned, booleans and blobs narrowed into the SQL value union, transaction work run inside the connection's transaction with its result returned, rollback and rethrow on failure, close                                                                                                                                                                                                      |
+| `apps/mobile/src/features/sessions/__tests__/sessionRepository.contract.ts`       | The behaviour every `SessionRepository` shares: sessions created with zero counts and listed newest first, `getSession` for a known and an unknown id; events appended in order with 1-based sequence numbers and packets counted, an empty append a no-op; paging by `fromSequence` and `limit`; ending a session keeping its events until it is deleted; `SessionNotFoundError` for an append or end on a missing session                                               |
+| `apps/mobile/src/features/sessions/__tests__/InMemorySessionRepository.test.ts`   | The contract suite against the in-memory implementation                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `apps/mobile/src/features/sessions/__tests__/SqliteSessionRepository.test.ts`     | The contract suite against SQLite through sql.js, plus the SQLite specifics: an append is atomic (a failure inside the batch leaves no row and no count behind), persisted JSON is validated on the way back with invalid and unparseable rows skipped and reported through `onInvalidRow`, a session row that fails its schema hidden from the list, an injectable id                                                                                                    |
+| `apps/mobile/src/features/sessions/__tests__/createLazySessionRepository.test.ts` | The store opened once, on first use, and shared by every call; every call rejected while opening fails and the open retried on the next call                                                                                                                                                                                                                                                                                                                              |
+| `apps/mobile/src/features/sessions/__tests__/recoverOpenSessions.test.ts`         | Sessions without an end closed at their newest event, or at their start when empty; nothing touched when every session is closed                                                                                                                                                                                                                                                                                                                                          |
+| `apps/mobile/src/features/sessions/__tests__/sessionRecorderReducer.test.ts`      | `idle → starting → recording → stopping → idle` with the revision bumped on start and stop, a second start ignored while starting or recording, a failed start returning to idle with the message, acknowledged counts accumulated for the open session only, dropped events counted with the session kept open, a late acknowledgement while stopping, a failed stop, `sessions_changed` bumping the revision only, devices independent                                  |
+| `apps/mobile/src/features/sessions/__tests__/sessionStatistics.test.ts`           | An empty session; counts by kind, bytes received and sent, notifications per second, RSSI min / max / average and per-characteristic traffic busiest first; an open session measured to its newest event; never a negative duration                                                                                                                                                                                                                                       |
+| `apps/mobile/src/features/sessions/__tests__/SessionRecorderProvider.test.tsx`    | Start, published activity persisted in order and the session ended with the buffer written first; a full buffer written without waiting for the timer; activity ignored while idle and after stop; a failed start reported and back to idle; a failed append leaving the session recording with the dropped count; sessions an earlier run left open closed on mount; two devices recorded independently; the hook throwing outside its provider                          |
+| `apps/mobile/src/features/sessions/__tests__/sessionPresentation.test.ts`         | Durations in seconds, minutes and hours; the local start time and unparseable input returned unchanged; every timeline row label (connection states in upper case, RSSI in dBm, discovery counts, subscriptions and packets with short UUIDs and vendor UUIDs kept in full, errors with their code); the Session row and its control for every recording phase, with drops and errors when any; the history row title and subtitle, "Recording" while open                |
+| `apps/mobile/tests/App.test.tsx` ("session recording")                            | Through the real navigator, the fake client and `InMemorySessionRepository`: the link, discovery, subscription and notifications recorded between Start and Stop; the session listed for its device, its statistics and timeline shown and the session deleted; a live session shown with its badge, its timeline growing and delete refused; the history opened from the device list with its empty state; a history that cannot be read reported and recovered on retry |
+
+Run the storage and session suites alone with `yarn jest apps/mobile/src/storage
+apps/mobile/src/features/sessions` from the repo root; `yarn test` runs them with everything
+else. There are no new XCTest or JUnit suites: M8 changes no Bluetooth native code.
 
 ## Mock BLE layer
 

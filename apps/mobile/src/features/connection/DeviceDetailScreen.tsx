@@ -14,6 +14,11 @@ import type { CachedDevice } from '../scan/deviceCache';
 import { describeLastSeen } from '../scan/lastSeen';
 import { useBluetoothSession } from '../scan/ScanProvider';
 import { useGatt } from '../gatt/GattProvider';
+import {
+  describeRecording,
+  describeSessionAction,
+} from '../sessions/sessionPresentation';
+import { useSessionRecorder } from '../sessions/SessionRecorderProvider';
 import { describeConnection, presentConnectionAction } from './connectionLabels';
 import { useConnections } from './ConnectionProvider';
 
@@ -34,6 +39,7 @@ export function DeviceDetailScreen(): React.JSX.Element {
   const { scan, bluetooth } = useBluetoothSession();
   const connections = useConnections();
   const gatt = useGatt();
+  const recorder = useSessionRecorder();
   const isFocused = useIsFocused();
 
   const cached = scan.devices.find(device => device.id === params.deviceId);
@@ -74,6 +80,21 @@ export function DeviceDetailScreen(): React.JSX.Element {
         break;
     }
   }, [action.kind, connections, params.deviceId]);
+
+  const recording = recorder.recordingOf(params.deviceId);
+  const sessionRow = describeRecording(recording);
+  const sessionAction = describeSessionAction(recording);
+  const deviceName = device?.name ?? device?.localName;
+  const onSessionAction = useCallback(() => {
+    switch (sessionAction.kind) {
+      case 'start':
+        recorder.startSession(params.deviceId, deviceName);
+        break;
+      case 'stop':
+        recorder.stopSession(params.deviceId);
+        break;
+    }
+  }, [deviceName, params.deviceId, recorder, sessionAction.kind]);
 
   const title = device?.name ?? device?.localName ?? 'Unknown device';
   const signal = presentSignal(liveRssi, device, scan.now);
@@ -161,6 +182,35 @@ export function DeviceDetailScreen(): React.JSX.Element {
           testID="inspect-gatt"
         />
       ) : null}
+
+      <StatusRow
+        label="Session"
+        value={sessionRow.value}
+        detail={sessionRow.detail}
+        testID="session"
+      />
+
+      <PrimaryButton
+        label={sessionAction.label}
+        onPress={onSessionAction}
+        disabled={!sessionAction.enabled}
+        testID="session-action"
+      />
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Session history for this device"
+        accessibilityHint="Opens the recorded sessions"
+        onPress={() =>
+          navigation.navigate('SessionHistory', { deviceId: params.deviceId })
+        }
+        style={({ pressed }) => [styles.link, { opacity: pressed ? 0.7 : 1 }]}
+        testID="session-history"
+      >
+        <Text style={[styles.linkLabel, { color: theme.colors.accent }]}>
+          Session history
+        </Text>
+      </Pressable>
 
       {device === undefined ? null : (
         <StatusRow
@@ -312,5 +362,14 @@ const styles = StyleSheet.create({
   },
   hint: {
     fontSize: 14,
+  },
+  link: {
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  linkLabel: {
+    fontSize: 17,
+    fontWeight: '600',
   },
 });

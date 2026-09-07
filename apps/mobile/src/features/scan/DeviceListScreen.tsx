@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { FlatList, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { RootNavigation } from '../../app/navigation/RootNavigator';
@@ -76,12 +76,27 @@ export function DeviceListScreen(): React.JSX.Element {
         keyboardShouldPersistTaps="handled"
         ListHeaderComponent={
           <View style={styles.header}>
-            <Text
-              accessibilityRole="header"
-              style={[styles.title, { color: theme.colors.textPrimary }]}
-            >
-              Beacon
-            </Text>
+            <View style={styles.titleRow}>
+              <Text
+                accessibilityRole="header"
+                style={[styles.title, { color: theme.colors.textPrimary }]}
+              >
+                Beacon
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Sessions"
+                accessibilityHint="Opens the recorded sessions"
+                hitSlop={12}
+                onPress={() => navigation.navigate('SessionHistory', {})}
+                style={({ pressed }) => [styles.link, { opacity: pressed ? 0.7 : 1 }]}
+                testID="open-sessions"
+              >
+                <Text style={[styles.linkLabel, { color: theme.colors.accent }]}>
+                  Sessions
+                </Text>
+              </Pressable>
+            </View>
             <ReadinessPanel handle={bluetooth} />
             <PrimaryButton
               label={button.label}
@@ -130,9 +145,24 @@ const styles = StyleSheet.create({
     gap: 16,
     marginBottom: 6,
   },
+  titleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+  },
   title: {
+    flex: 1,
     fontSize: 32,
     fontWeight: '700',
+  },
+  link: {
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  linkLabel: {
+    fontSize: 17,
+    fontWeight: '600',
   },
   sectionTitle: {
     fontSize: 18,
