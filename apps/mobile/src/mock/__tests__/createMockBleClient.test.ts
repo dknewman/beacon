@@ -117,6 +117,88 @@ describe('createMockBleClient connections', () => {
     }
   });
 
+  it('reads scripted values and stores writes, refusing what the properties forbid', async () => {
+    const BATTERY = '0000180F-0000-1000-8000-00805F9B34FB';
+    const LEVEL = '00002A19-0000-1000-8000-00805F9B34FB';
+    const HR_CONTROL = '00002A39-0000-1000-8000-00805F9B34FB';
+    const { client, advance } = createClient({ connectStepMs: 100 });
+
+    const before = client.readCharacteristic(HRM, BATTERY, LEVEL);
+    await advance(10);
+    await expect(before).rejects.toMatchObject({ code: 'disconnected' });
+
+    const connectCall = client.connect(HRM);
+    await advance(320);
+    await connectCall;
+
+    const level = client.readCharacteristic(HRM, BATTERY, LEVEL.toLowerCase());
+    await advance(10);
+    await expect(level).resolves.toEqual([0x5c]);
+
+    const missing = client.readCharacteristic(
+      HRM,
+      BATTERY,
+      '00002AFF-0000-1000-8000-00805F9B34FB',
+    );
+    await advance(10);
+    await expect(missing).rejects.toMatchObject({ code: 'characteristic_not_found' });
+
+    const wrongService = client.readCharacteristic(
+      HRM,
+      '0000FFFF-0000-1000-8000-00805F9B34FB',
+      LEVEL,
+    );
+    await advance(10);
+    await expect(wrongService).rejects.toMatchObject({ code: 'service_not_found' });
+
+    const writeToReadOnly = client.writeCharacteristic({
+      deviceId: HRM,
+      serviceUuid: BATTERY,
+      characteristicUuid: LEVEL,
+      bytes: [1],
+      mode: 'with_response',
+    });
+    await advance(10);
+    await expect(writeToReadOnly).rejects.toMatchObject({ code: 'write_failed' });
+
+    const controlPoint = client.writeCharacteristic({
+      deviceId: HRM,
+      serviceUuid: HEART_RATE_SERVICE,
+      characteristicUuid: HR_CONTROL,
+      bytes: [0x01],
+      mode: 'with_response',
+    });
+    await advance(10);
+    await expect(controlPoint).resolves.toBeUndefined();
+    expect(client.valueOf(HRM, HR_CONTROL)).toEqual([0x01]);
+
+    const withoutResponse = client.writeCharacteristic({
+      deviceId: HRM,
+      serviceUuid: HEART_RATE_SERVICE,
+      characteristicUuid: HR_CONTROL,
+      bytes: [0x02],
+      mode: 'without_response',
+    });
+    await advance(10);
+    await expect(withoutResponse).rejects.toMatchObject({ code: 'write_failed' });
+
+    const readWriteOnly = client.readCharacteristic(HRM, HEART_RATE_SERVICE, HR_CONTROL);
+    await advance(10);
+    await expect(readWriteOnly).rejects.toMatchObject({ code: 'read_failed' });
+
+    client.failNextRead(
+      HRM,
+      LEVEL,
+      new BleError({ code: 'read_failed', message: 'status 133' }),
+    );
+    const scriptedFailure = client.readCharacteristic(HRM, BATTERY, LEVEL);
+    await advance(10);
+    await expect(scriptedFailure).rejects.toMatchObject({ message: 'status 133' });
+    const recovered = client.readCharacteristic(HRM, BATTERY, LEVEL);
+    await advance(10);
+    await expect(recovered).resolves.toEqual([0x5c]);
+  });
+
   it('rejects unknown devices and RSSI reads without a link', async () => {
     const { client, advance } = createClient();
     const unknown = client.connect('nope');

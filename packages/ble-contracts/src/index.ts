@@ -9,5 +9,6 @@ export * from './session';
 export * from './errors';
 export * from './uuid';
 export * from './known-uuids';
+export * from './bytes';
 export * from './native-client';
 export * from './native-events';
