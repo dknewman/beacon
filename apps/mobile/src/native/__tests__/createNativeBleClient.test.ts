@@ -4,6 +4,7 @@ import { createNativeBleClient } from '../createNativeBleClient';
 import type {
   BleErrorEvent,
   BluetoothStateChangedEvent,
+  CharacteristicValueChangedEvent,
   ConnectionStateChangedEvent,
   DeviceDiscoveredEvent,
   Spec,
@@ -23,6 +24,7 @@ type SpecOverrides = Partial<
     | 'discoverServices'
     | 'readCharacteristic'
     | 'writeCharacteristic'
+    | 'setNotify'
   >
 >;
 
@@ -56,6 +58,13 @@ function createFakeSpec(overrides: SpecOverrides = {}) {
   const discovered = createEmitter<DeviceDiscoveredEvent>();
   const connection = createEmitter<ConnectionStateChangedEvent>();
   const errors = createEmitter<BleErrorEvent>();
+  const values = createEmitter<CharacteristicValueChangedEvent>();
+  const setNotifyCalls: Array<{
+    deviceId: string;
+    serviceUuid: string;
+    characteristicUuid: string;
+    enabled: boolean;
+  }> = [];
   const startScanCalls: Array<{ serviceUuids: string[]; allowDuplicates: boolean }> = [];
   const writeCalls: Array<{
     deviceId: string;
@@ -97,22 +106,33 @@ function createFakeSpec(overrides: SpecOverrides = {}) {
       writeCalls.push({ deviceId, serviceUuid, characteristicUuid, bytes, withResponse });
       return Promise.resolve();
     },
+    setNotify: (deviceId, serviceUuid, characteristicUuid, enabled) => {
+      setNotifyCalls.push({ deviceId, serviceUuid, characteristicUuid, enabled });
+      return Promise.resolve();
+    },
     ...overrides,
     onBluetoothStateChanged: stateChanged.emitter,
     onDeviceDiscovered: discovered.emitter,
     onConnectionStateChanged: connection.emitter,
+    onCharacteristicValueChanged: values.emitter,
     onBleError: errors.emitter,
   };
   return {
     spec,
     startScanCalls,
     writeCalls,
+    setNotifyCalls,
+    emitValue: values.emit,
     emitState: stateChanged.emit,
     emitDevice: discovered.emit,
     emitConnection: connection.emit,
     emitError: errors.emit,
     handlerCount: () =>
-      stateChanged.count() + discovered.count() + connection.count() + errors.count(),
+      stateChanged.count() +
+      discovered.count() +
+      connection.count() +
+      values.count() +
+      errors.count(),
   };
 }
 
@@ -331,6 +351,34 @@ describe('createNativeBleClient', () => {
       ).rejects.toMatchObject({ code: 'write_failed' });
     });
 
+    it('flattens subscription requests and maps rejections to subscription_failed', async () => {
+      const fake = createFakeSpec();
+      const client = createNativeBleClient(fake.spec);
+      await client.setNotify({
+        deviceId: 'a',
+        serviceUuid: '180D',
+        characteristicUuid: '2A37',
+        enabled: true,
+      });
+      expect(fake.setNotifyCalls).toEqual([
+        { deviceId: 'a', serviceUuid: '180D', characteristicUuid: '2A37', enabled: true },
+      ]);
+      const { spec } = createFakeSpec({
+        setNotify: () => Promise.reject(new Error('CCCD write failed')),
+      });
+      await expect(
+        createNativeBleClient(spec).setNotify({
+          deviceId: 'a',
+          serviceUuid: '180D',
+          characteristicUuid: '2A37',
+          enabled: false,
+        }),
+      ).rejects.toMatchObject({
+        code: 'subscription_failed',
+        message: 'CCCD write failed',
+      });
+    });
+
     it('validates RSSI reads', async () => {
       const good = createNativeBleClient(createFakeSpec().spec);
       await expect(good.readRssi('a')).resolves.toBe(-61);
@@ -397,6 +445,40 @@ describe('createNativeBleClient', () => {
       });
     });
 
+    it('normalizes notification values and rejects malformed ones', () => {
+      const fake = createFakeSpec();
+      const client = createNativeBleClient(fake.spec);
+      const received: NativeBleEvent[] = [];
+      client.subscribe(event => received.push(event));
+
+      fake.emitValue({
+        deviceId: 'a',
+        serviceUuid: '180d',
+        characteristicUuid: '2a37',
+        bytes: [0x16, 0x48],
+        timestamp: '2026-09-07T10:00:00.250Z',
+      });
+      fake.emitValue({
+        deviceId: 'a',
+        serviceUuid: '180d',
+        characteristicUuid: '2a37',
+        bytes: [300],
+        timestamp: '2026-09-07T10:00:00.251Z',
+      });
+      expect(received[0]).toEqual({
+        type: 'characteristic.value_changed',
+        deviceId: 'a',
+        serviceUuid: '0000180D-0000-1000-8000-00805F9B34FB',
+        characteristicUuid: '00002A37-0000-1000-8000-00805F9B34FB',
+        bytes: [0x16, 0x48],
+        timestamp: '2026-09-07T10:00:00.250Z',
+      });
+      expect(received[1]).toMatchObject({
+        type: 'ble.error',
+        error: { code: 'invalid_payload', message: expect.stringContaining('bytes') },
+      });
+    });
+
     it('delivers native error events with their contract code', () => {
       const fake = createFakeSpec();
       const client = createNativeBleClient(fake.spec);
@@ -445,7 +527,7 @@ describe('createNativeBleClient', () => {
       const fake = createFakeSpec();
       const client = createNativeBleClient(fake.spec);
       const unsubscribe = client.subscribe(() => {});
-      expect(fake.handlerCount()).toBe(4);
+      expect(fake.handlerCount()).toBe(5);
       unsubscribe();
       expect(fake.handlerCount()).toBe(0);
     });

@@ -199,6 +199,110 @@ describe('createMockBleClient connections', () => {
     await expect(recovered).resolves.toEqual([0x5c]);
   });
 
+  it('pushes scripted notifications while subscribed and stops with the link', async () => {
+    const HR_MEASUREMENT = '00002A37-0000-1000-8000-00805F9B34FB';
+    const HR_CONTROL = '00002A39-0000-1000-8000-00805F9B34FB';
+    const { client, events, advance } = createClient({ connectStepMs: 100 });
+
+    const before = client.setNotify({
+      deviceId: HRM,
+      serviceUuid: HEART_RATE_SERVICE,
+      characteristicUuid: HR_MEASUREMENT,
+      enabled: true,
+    });
+    await advance(10);
+    await expect(before).rejects.toMatchObject({ code: 'disconnected' });
+
+    const connectCall = client.connect(HRM);
+    await advance(320);
+    await connectCall;
+
+    const unsupported = client.setNotify({
+      deviceId: HRM,
+      serviceUuid: HEART_RATE_SERVICE,
+      characteristicUuid: HR_CONTROL,
+      enabled: true,
+    });
+    await advance(10);
+    await expect(unsupported).rejects.toMatchObject({ code: 'subscription_failed' });
+
+    events.length = 0;
+    const on = client.setNotify({
+      deviceId: HRM,
+      serviceUuid: HEART_RATE_SERVICE,
+      characteristicUuid: HR_MEASUREMENT.toLowerCase(),
+      enabled: true,
+    });
+    await advance(10);
+    await expect(on).resolves.toBeUndefined();
+    expect(client.isNotifying(HRM, HR_MEASUREMENT)).toBe(true);
+    await advance(3_000);
+    const values = events.filter(event => event.type === 'characteristic.value_changed');
+    expect(values).toHaveLength(3);
+    expect(values[0]).toMatchObject({
+      deviceId: HRM,
+      serviceUuid: HEART_RATE_SERVICE,
+      characteristicUuid: HR_MEASUREMENT,
+    });
+    for (const event of values) {
+      expect(parseNativeBleEvent(event).ok).toBe(true);
+      if (event.type === 'characteristic.value_changed') {
+        expect(event.bytes[0]).toBe(0x00);
+        expect(event.bytes[1]).toBeGreaterThan(60);
+        expect(event.bytes[1]).toBeLessThan(90);
+      }
+    }
+    // The latest notified value is what a read returns next.
+    const read = client.readCharacteristic(HRM, HEART_RATE_SERVICE, HR_MEASUREMENT);
+    await advance(10);
+    await expect(read).rejects.toMatchObject({ code: 'read_failed' });
+    expect(client.valueOf(HRM, HR_MEASUREMENT)).toHaveLength(2);
+
+    const off = client.setNotify({
+      deviceId: HRM,
+      serviceUuid: HEART_RATE_SERVICE,
+      characteristicUuid: HR_MEASUREMENT,
+      enabled: false,
+    });
+    await advance(10);
+    await off;
+    expect(client.isNotifying(HRM, HR_MEASUREMENT)).toBe(false);
+    events.length = 0;
+    await advance(3_000);
+    expect(events.some(event => event.type === 'characteristic.value_changed')).toBe(
+      false,
+    );
+
+    const again = client.setNotify({
+      deviceId: HRM,
+      serviceUuid: HEART_RATE_SERVICE,
+      characteristicUuid: HR_MEASUREMENT,
+      enabled: true,
+    });
+    await advance(10);
+    await again;
+    client.dropConnection(HRM);
+    expect(client.isNotifying(HRM, HR_MEASUREMENT)).toBe(false);
+
+    client.failNextSetNotify(
+      HRM,
+      HR_MEASUREMENT,
+      new BleError({ code: 'subscription_failed', message: 'CCCD write failed' }),
+    );
+    const reconnect = client.connect(HRM);
+    await advance(320);
+    await reconnect;
+    const scripted = client.setNotify({
+      deviceId: HRM,
+      serviceUuid: HEART_RATE_SERVICE,
+      characteristicUuid: HR_MEASUREMENT,
+      enabled: true,
+    });
+    await advance(10);
+    await expect(scripted).rejects.toMatchObject({ message: 'CCCD write failed' });
+    expect(client.isNotifying(HRM, HR_MEASUREMENT)).toBe(false);
+  });
+
   it('rejects unknown devices and RSSI reads without a link', async () => {
     const { client, advance } = createClient();
     const unknown = client.connect('nope');

@@ -6,12 +6,17 @@ import {
   type GattCharacteristic,
   type GattService,
   type NativeBleEvent,
+  type NotificationRequest,
   type ScanOptions,
   type Unsubscribe,
   type WriteCharacteristicRequest,
 } from '@beacon/ble-contracts';
 import type { BleClient } from '../native/BleClient';
-import { defaultMockPeripherals, type MockPeripheral } from './mockPeripherals';
+import {
+  defaultMockPeripherals,
+  type MockNotifier,
+  type MockPeripheral,
+} from './mockPeripherals';
 
 /** Timer surface the mock uses, so tests can drive it with a fake scheduler. */
 export interface MockScheduler {
@@ -55,6 +60,10 @@ export interface MockBleClient extends BleClient {
   failNextRead(deviceId: string, characteristicUuid: string, error: BleError): void;
   /** Makes the next write to this characteristic reject (once) with this error. */
   failNextWrite(deviceId: string, characteristicUuid: string, error: BleError): void;
+  /** Makes the next setNotify for this characteristic reject (once) with this error. */
+  failNextSetNotify(deviceId: string, characteristicUuid: string, error: BleError): void;
+  /** Whether the mock is currently pushing values for this characteristic. */
+  isNotifying(deviceId: string, characteristicUuid: string): boolean;
   /** Current scripted value of a characteristic, after any writes this session. */
   valueOf(deviceId: string, characteristicUuid: string): number[] | undefined;
   connectionStateOf(deviceId: string): ConnectionState;
@@ -106,6 +115,9 @@ export function createMockBleClient(options: MockBleClientOptions = {}): MockBle
   const values = new Map<string, number[]>();
   const nextReadErrors = new Map<string, BleError>();
   const nextWriteErrors = new Map<string, BleError>();
+  const nextNotifyErrors = new Map<string, BleError>();
+  /** Running notifiers by value key: the interval handle and how many values went out. */
+  const notifiers = new Map<string, { handle: unknown; sequence: number }>();
   let scanFilter: string[] = [];
 
   const valueKey = (deviceId: string, characteristicUuid: string) =>
@@ -251,8 +263,45 @@ export function createMockBleClient(options: MockBleClientOptions = {}): MockBle
   };
 
   /** Ends a link with an error (remote drop, failure) or cleanly (undefined). */
+  const stopNotifiers = (deviceId: string) => {
+    notifiers.forEach((notifier, key) => {
+      if (key.startsWith(`${deviceId}/`)) {
+        scheduler.clearInterval(notifier.handle);
+        notifiers.delete(key);
+      }
+    });
+  };
+
+  const startNotifier = (
+    peripheral: MockPeripheral,
+    characteristic: GattCharacteristic,
+    notifier: MockNotifier,
+  ) => {
+    const key = valueKey(peripheral.id, characteristic.uuid);
+    if (notifiers.has(key)) {
+      return;
+    }
+    const entry = { handle: undefined as unknown, sequence: 0 };
+    entry.handle = scheduler.setInterval(() => {
+      const bytes = notifier.produce(entry.sequence, random);
+      entry.sequence += 1;
+      values.set(key, [...bytes]);
+      emit({
+        type: 'characteristic.value_changed',
+        deviceId: peripheral.id,
+        serviceUuid: characteristic.serviceUuid,
+        characteristicUuid: characteristic.uuid,
+        bytes,
+        timestamp: new Date(now()).toISOString(),
+      });
+    }, notifier.intervalMs);
+    notifiers.set(key, entry);
+  };
+
   const endLink = (deviceId: string, link: MockLink, error: BleError | undefined) => {
     clearStep(link);
+    // The platform ends every subscription with the link.
+    stopNotifiers(deviceId);
     if (error !== undefined) {
       emit({ type: 'ble.error', deviceId, error: error.toInfo() });
       link.pendingConnect?.reject(error);
@@ -496,6 +545,48 @@ export function createMockBleClient(options: MockBleClientOptions = {}): MockBle
         values.set(valueKey(request.deviceId, characteristic.uuid), [...request.bytes]);
       }),
 
+    setNotify: (request: NotificationRequest) =>
+      later((): void => {
+        const { peripheral, characteristic } = characteristicOf(
+          request.deviceId,
+          request.serviceUuid,
+          request.characteristicUuid,
+        );
+        const key = valueKey(request.deviceId, characteristic.uuid);
+        const scriptedError = nextNotifyErrors.get(key);
+        if (scriptedError !== undefined) {
+          nextNotifyErrors.delete(key);
+          throw scriptedError;
+        }
+        const supported =
+          characteristic.properties.includes('notify') ||
+          characteristic.properties.includes('indicate');
+        if (!supported) {
+          throw new BleError({
+            code: 'subscription_failed',
+            message: 'Notifications not supported',
+            nativeDomain: 'MockGatt',
+          });
+        }
+        if (!request.enabled) {
+          const running = notifiers.get(key);
+          if (running !== undefined) {
+            scheduler.clearInterval(running.handle);
+            notifiers.delete(key);
+          }
+          return;
+        }
+        const notifier = Object.entries(peripheral.notifiers ?? {}).find(
+          ([uuid]) => uuid.toUpperCase() === characteristic.uuid.toUpperCase(),
+        )?.[1];
+        if (notifier === undefined) {
+          // Subscribed, but this script never pushes anything: realistic for a
+          // characteristic that only notifies on change.
+          return;
+        }
+        startNotifier(peripheral, characteristic, notifier);
+      }),
+
     subscribe(listener: (event: NativeBleEvent) => void): Unsubscribe {
       listeners.add(listener);
       return () => {
@@ -560,6 +651,14 @@ export function createMockBleClient(options: MockBleClientOptions = {}): MockBle
 
     failNextWrite(deviceId: string, characteristicUuid: string, error: BleError) {
       nextWriteErrors.set(valueKey(deviceId, characteristicUuid), error);
+    },
+
+    failNextSetNotify(deviceId: string, characteristicUuid: string, error: BleError) {
+      nextNotifyErrors.set(valueKey(deviceId, characteristicUuid), error);
+    },
+
+    isNotifying(deviceId: string, characteristicUuid: string): boolean {
+      return notifiers.has(valueKey(deviceId, characteristicUuid));
     },
 
     valueOf(deviceId: string, characteristicUuid: string): number[] | undefined {
