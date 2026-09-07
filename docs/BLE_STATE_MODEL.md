@@ -129,6 +129,52 @@ as soon as the connection is `ready`, and drops it (`link_ended`) whenever the c
 coordinator reports the device left `ready`, so a stale table never outlives its link.
 Implemented in `features/gatt/gattReducer.ts`.
 
+## Characteristic operation (`CharacteristicOperationState`) — M5
+
+```text
+idle ──read_started──► reading ──read_succeeded / read_failed──► idle (lastOutcome)
+idle ──write_started──► writing ──write_succeeded / write_failed──► idle (lastOutcome)
+any ──reset──► idle
+```
+
+One state per characteristic screen, owned by `useCharacteristicOperations`. `busy` is
+`idle | reading | writing`; `read_started` and `write_started` are ignored unless `busy` is
+`idle`, so a second tap while an operation is in flight is a no-op and the UI never has two
+operations outstanding. Every completion returns to `idle` and records `lastOutcome`: the kind
+(`read` or `write`), whether it succeeded, the byte count or the `BleError`, the write mode and
+the time. The status row shows "Reading…" / "Writing…" while busy and the outcome afterwards
+(`describeOutcome`), including the contract code for a failure. Controls are additionally gated
+on the connection being `ready` and on the characteristic's properties (`read`, `write`,
+`write_without_response`); a missing property hides the control, a non-ready link disables it
+with a reason. Implemented in `features/gatt/characteristicOperations.ts`.
+
+## Packet log (`PacketLogState`) — M5
+
+```text
+packet_recorded { packet } ──► prepend to packets[deviceId], drop beyond 500
+log_cleared { deviceId }   ──► remove packets[deviceId]
+```
+
+A per-device ring buffer of `BlePacket` (id, timestamp, device, service and characteristic
+UUIDs, `incoming | outgoing`, bytes as `number[]`), newest first, capped at
+`DEFAULT_PACKET_LOG_CAPACITY` (500). `useCharacteristicOperations` records a successful read
+as `incoming` and a successful write as `outgoing`; failures are not packets and stay in
+`lastOutcome`. `PacketLogProvider` holds the log above navigation so the history survives
+screen changes and outlives the link: losing the connection keeps the packets and the last
+value on screen while the controls go with the table. Implemented in
+`features/packets/packetLogReducer.ts`; the M6 value-changed events and the M7 parsers read
+from the same log.
+
+### GATT queue and the connection machine
+
+Native serializes reads and writes per peripheral in `GattOperationQueue` (ADR 0006): an
+operation starts when the queue is idle, otherwise waits for the predecessor's callback. A
+call made while the device is not `ready` rejects with `disconnected` without being queued.
+When the link ends for any reason, the owner cancels the queue and settles every in-flight and
+pending completion with `disconnected`; as with every device-scoped error, the `ble.error`
+event arrives before the `disconnected` transition, so the connection machine records
+`lastError` and the operation state records the same code in `lastOutcome`.
+
 ## Events
 
 `NativeBleEvent` is a discriminated union on `type`:

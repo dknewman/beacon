@@ -7,5 +7,6 @@
 | [0003](0003-monorepo-workspace-layout.md)                   | yarn workspaces monorepo with node-resolved native paths  | Accepted |
 | [0004](0004-scan-duplicates-and-device-cache.md)            | Duplicate advertisements, native throttling, JS cache     | Accepted |
 | [0005](0005-navigation-and-connection-promise-semantics.md) | React Navigation; connect() resolves at ready; JS timeout | Accepted |
+| [0006](0006-gatt-operation-queue-and-packet-log.md)         | Native GATT operation queue; bounded packet log           | Accepted |
 
-Planned: GATT operation queue (M4/M5), session persistence (M8), parser registry (M7).
+Planned: session persistence (M8), parser registry (M7).
