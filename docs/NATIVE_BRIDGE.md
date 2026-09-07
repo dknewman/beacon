@@ -31,11 +31,24 @@ export interface Spec extends TurboModule {
     bytes: number[],
     withResponse: boolean,
   ): Promise<void>;
+  setNotify(
+    deviceId: string,
+    serviceUuid: string,
+    characteristicUuid: string,
+    enabled: boolean,
+  ): Promise<void>;
   readonly onBluetoothStateChanged: CodegenTypes.EventEmitter<{ state: string }>;
   readonly onDeviceDiscovered: CodegenTypes.EventEmitter<DeviceDiscoveredEvent>; // BleDevice shape
   readonly onConnectionStateChanged: CodegenTypes.EventEmitter<{
     deviceId: string;
     state: string;
+  }>;
+  readonly onCharacteristicValueChanged: CodegenTypes.EventEmitter<{
+    deviceId: string;
+    serviceUuid: string;
+    characteristicUuid: string;
+    bytes: number[];
+    timestamp: string; // ISO-8601, taken natively at receipt
   }>;
   readonly onBleError: CodegenTypes.EventEmitter<{
     deviceId?: string;
@@ -92,6 +105,49 @@ reads as unsigned integers so `0xFF` arrives as `255` on both. A fractional, neg
 oversized or non-finite value in a write is rejected with `invalid_payload` before the stack
 sees it.
 
+### Notifications and indications (M6)
+
+`setNotify(deviceId, serviceUuid, characteristicUuid, enabled)` subscribes to, or unsubscribes
+from, a characteristic and resolves once the peripheral has acknowledged the change, not when
+the request was handed to the stack: on iOS when `didUpdateNotificationStateFor` reports the
+new state, on Android when `onDescriptorWrite` confirms the Client Characteristic
+Configuration descriptor write. Native picks a notification when the characteristic offers
+`notify` and an indication only when it offers `indicate` alone; the caller does not choose.
+The call is queued behind any other GATT operation on the same peripheral (ADR 0006) and
+rejects with:
+
+| Code                       | When                                                                                                                                                                           |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `disconnected`             | No `ready` link to the device, or the link ended while the change was queued or in flight                                                                                      |
+| `service_not_found`        | The discovered table has no such service                                                                                                                                       |
+| `characteristic_not_found` | The service has no such characteristic                                                                                                                                         |
+| `subscription_failed`      | The platform reported an error or refused the request (status kept in `nativeCode`), or the characteristic has neither `notify` nor `indicate` ("Notifications not supported") |
+
+Values then arrive on `onCharacteristicValueChanged` as `{ deviceId, serviceUuid,
+characteristicUuid, bytes, timestamp }`: `bytes` are unsigned `0..255` like a read result and
+`timestamp` is the ISO-8601 instant native received the value, taken on the CoreBluetooth
+queue or the binder thread before the bridge hop so a burst keeps its order and spacing (ADR
+0007). The wrapper validates every event (`characteristicValueChangedEventSchema`: UUIDs
+normalized to canonical form, byte range, ISO timestamp) into `characteristic.value_changed`;
+a malformed one becomes a `ble.error` with `invalid_payload`. One event per value crosses the
+bridge; batching happens in the application layer, not here.
+
+Every subscription ends with the link. Neither platform reports that per characteristic, so
+there is no "unsubscribed" event: JavaScript drops its subscription state when the connection
+leaves `ready`, and a `setNotify` still waiting is rejected with `disconnected` like any other
+queued operation.
+
+CCCD: Android's `setCharacteristicNotification` only routes `onCharacteristicChanged` to the
+app; the peripheral starts pushing values only after the client writes the Client
+Characteristic Configuration descriptor (`0x2902`) with `ENABLE_NOTIFICATION_VALUE`,
+`ENABLE_INDICATION_VALUE` or `DISABLE_NOTIFICATION_VALUE`, which `DeviceConnection` does
+inside the queued operation. A characteristic that advertises `notify` or `indicate` without
+that descriptor cannot be configured remotely; the request is refused with `subscription_failed`
+("The characteristic has no client characteristic configuration descriptor") and the local
+switch is flipped back, as CoreBluetooth refuses it on iOS.
+CoreBluetooth performs the descriptor write itself inside `setNotifyValue(_:for:)`, which is
+why the iOS side has no descriptor code.
+
 The iOS and Android builds run codegen automatically. The standalone
 `react-native codegen` command also works for inspection, but note that it ignores
 `javaPackageName` for app projects and emits the Android spec under `com.facebook.fbreact.specs`;
@@ -102,12 +158,13 @@ the Gradle build is the source of truth.
 ```text
 BeaconBluetoothModule.mm  (Objective-C++)  — conforms to the generated spec, forwards to Swift
 BluetoothManager.swift                     — owns CBCentralManager; adapter state, permission, scanning, connections
-PeripheralSession.swift                    — one CBPeripheral + private CBPeripheralDelegate proxy, pending completions, GATT queue
+PeripheralSession.swift                    — one CBPeripheral + private CBPeripheralDelegate proxy, pending completions, GATT queue, subscribed set
 GattOperationQueue.swift                   — pure per-peripheral serialization of GATT operations (ADR 0006)
 Mapping/BluetoothStateMapper.swift         — CBManagerState → wire value
 Mapping/ConnectionStateMapper.swift        — BleConnectionState wire vocabulary, CBPeripheralState mapping
 Mapping/GattMapper.swift                   — CBService/CBCharacteristic → GattService payloads, property option set → wire values, canonical UUID for lookups
 Mapping/ByteArrayMapper.swift              — [NSNumber] ⇄ Data with 0...255 range validation
+Mapping/CharacteristicValueMapper.swift    — pushed value → CharacteristicValueChangedEvent payload (canonical UUIDs, ISO timestamp), subscription keys
 Mapping/AuthorizationMapper.swift          — CBManagerAuthorization → wire value
 Mapping/AdvertisementMapper.swift          — discovery callback → BleDevice payload, UUID parsing
 Errors/BleError.swift                      — CoreBluetooth errors → contract codes
@@ -148,6 +205,25 @@ stack's buffer is dropped by CoreBluetooth rather than reported. A link that end
 reason cancels the queue and rejects every waiting completion with `disconnected` before the
 transition is emitted.
 
+Notifications: `setNotify` resolves the characteristic the same way, checks `.notify` /
+`.indicate` (neither rejects with `subscription_failed`, "Notifications not supported"), and
+enqueues `setNotifyValue(_:for:)` with the completion kept in `pendingNotify`; the request is
+forwarded even when `isNotifying` already matches, so the completion reports the peripheral's
+answer rather than cached state. `didUpdateNotificationStateFor` records the peripheral's
+`isNotifying` in the session's `subscribedCharacteristics` (keyed by canonical UUIDs through
+`CharacteristicValueMapper.subscriptionKey`) on every successful callback, settles the pending
+completion (a CoreBluetooth error maps to `subscription_failed`) and calls `finish()`. A
+`didUpdateValueFor` with no read pending for that characteristic is a notification or
+indication: `CharacteristicValueMapper.map` builds the event with canonical UUIDs, the bytes
+via `ByteArrayMapper` (a nil value becomes an empty packet) and the receipt time stamped on
+the manager's queue in ISO-8601 (`AdvertisementMapper.isoTimestamp`), and it is emitted on
+`onCharacteristicValueChanged`. The subscribed set is bookkeeping only and is not consulted
+before emitting, so a value that lands before the acknowledgement is not dropped; an error
+in such an update is emitted as a device-scoped `ble.error` with `subscription_failed`, which
+the connection coordinator ignores because operation-level codes never mean the link is gone. A
+link that ends clears the subscribed set, because CoreBluetooth drops subscriptions with the
+connection, and the queue cancellation rejects a pending `setNotify` with `disconnected`.
+
 ## Android
 
 ```text
@@ -156,10 +232,10 @@ BeaconBluetoothPackage.kt  — BaseReactPackage registration (isTurboModule = tr
 BluetoothController.kt     — BluetoothManager/BluetoothAdapter, ACTION_STATE_CHANGED receiver
 scanning/BleScanner.kt     — BluetoothLeScanner, pre-flight checks, throttling, onScanFailed
 connection/ConnectionRegistry.kt — one DeviceConnection per address, shared pre-flight checks
-connection/DeviceConnection.kt   — BluetoothGatt + BluetoothGattCallback, state machine, pending promises, GATT queue
+connection/DeviceConnection.kt   — BluetoothGatt + BluetoothGattCallback, state machine, pending promises, GATT queue, descriptor writes
 connection/GattOperationQueue.kt — pure per-connection serialization of GATT operations (ADR 0006)
 permissions/*              — runtime permission flow (see PERMISSIONS.md)
-mapping/BluetoothStateMapper.kt, ConnectionStateMapper.kt, GattStatusMapper.kt, GattTreeMapper.kt, ByteArrayMapper.kt, ScanResultMapper.kt, BleUuid.kt, ScanFailureMapper.kt, IsoTimestamp.kt
+mapping/BluetoothStateMapper.kt, ConnectionStateMapper.kt, GattStatusMapper.kt, GattTreeMapper.kt, ByteArrayMapper.kt, NotificationDescriptorMapper.kt, ScanResultMapper.kt, BleUuid.kt, ScanFailureMapper.kt, IsoTimestamp.kt
 errors/BleError.kt         — contract codes, Promise.rejectWith, Throwable.toBleError
 ```
 
@@ -187,11 +263,35 @@ response confirms only that the local stack sent it. A `false` or non-success re
 platform call settles the promise with `write_failed` / `read_failed` and lets the queue move
 on; closing the client cancels the queue and rejects every waiting promise with `disconnected`.
 
+Notifications: `setNotify` finds the characteristic in the discovered tree and asks
+`NotificationDescriptorMapper.cccdValue` for the descriptor value its property bits call for:
+`ENABLE_NOTIFICATION_VALUE`, `ENABLE_INDICATION_VALUE` only when the characteristic lacks
+`notify`, `DISABLE_NOTIFICATION_VALUE` when disabling, and none for a characteristic with
+neither property, which rejects with `subscription_failed` ("Notifications not supported")
+without entering the queue. The queued operation calls
+`setCharacteristicNotification(characteristic, enabled)`, the stack's local delivery switch,
+and then writes the Client Characteristic Configuration descriptor
+(`NotificationDescriptorMapper.CCCD_UUID`, `0x2902`): on API 33+ through
+`writeDescriptor(descriptor, value)`, whose status `GattStatusMapper.requestRejection`
+interprets, on older devices through the deprecated path that sets `descriptor.value` first.
+`onDescriptorWrite` settles the pending change (`pendingNotify`), records it in the
+connection's `subscribed` set on success or, on a non-success status, flips the local switch
+back and rejects with `subscription_failed` and the status in `nativeCode`, and lets the queue
+move on. A characteristic without the descriptor is refused up front with `subscription_failed`
+and the local switch flipped back, so the app never shows a subscription that cannot deliver.
+`onCharacteristicChanged` (the
+API 33 overload that carries the value and the legacy one that reads `characteristic.value`)
+stamps the value with `IsoTimestamp` on the binder thread before taking the lock, formats
+both UUIDs with `BleUuid.format` so they match the discovered table, and hands it to the
+module, which emits the event with the bytes unpacked as unsigned integers. Closing the
+client ends every subscription (the `subscribed` set is cleared with the link); the queue
+cancellation rejects a pending `setNotify` with `disconnected`.
+
 ## JavaScript wrapper
 
-`apps/mobile/src/native/createNativeBleClient.ts` implements `BleClient`
-(`BluetoothAdapterApi & PermissionApi & ScanApi & ConnectionApi & GattDiscoveryApi &
-GattValueApi`):
+`apps/mobile/src/native/createNativeBleClient.ts` implements `BleClient`, which since M6 is
+the whole `NativeBleClient` contract (`BluetoothAdapterApi & PermissionApi & ScanApi &
+ConnectionApi & GattDiscoveryApi & GattValueApi & GattNotifyApi`):
 
 - Value-returning calls validate the result (`parseBluetoothState`, `parseBlePermissionState`);
   invalid values reject with `BleError("invalid_payload")`; native rejections are mapped with
@@ -206,9 +306,12 @@ GattValueApi`):
   `0..255`); rejections default to `read_failed`. `writeCharacteristic(request)` flattens the
   request onto the five scalar spec arguments, mapping `mode: 'with_response'` onto
   `withResponse: true`; rejections default to `write_failed`.
-- `subscribe()` folds the four typed emitters into the `NativeBleEvent` union, validates each
-  payload (`scan.device_discovered` also normalizes UUIDs), and returns one unsubscribe function
-  that removes every native subscription.
+- `setNotify(request)` flattens the `NotificationRequest` onto the four scalar spec arguments;
+  rejections default to `subscription_failed`.
+- `subscribe()` folds the five typed emitters into the `NativeBleEvent` union, validates each
+  payload (`scan.device_discovered` and `characteristic.value_changed` also normalize UUIDs;
+  the latter checks the byte range and the native timestamp too), and returns one unsubscribe
+  function that removes every native subscription.
 
 ## Error convention
 
