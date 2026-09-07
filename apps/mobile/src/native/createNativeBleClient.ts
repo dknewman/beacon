@@ -6,10 +6,12 @@ import {
   type NativeBleEvent,
   type ScanOptions,
   type Unsubscribe,
+  type WriteCharacteristicRequest,
 } from '@beacon/ble-contracts';
 import {
   parseBlePermissionState,
   parseBluetoothState,
+  parseByteArray,
   parseGattServices,
   parseNativeBleEvent,
   parseRssi,
@@ -70,6 +72,32 @@ export function createNativeBleClient(spec: Spec): BleClient {
       return callValidated(() => spec.discoverServices(deviceId), parseGattServices);
     },
 
+    readCharacteristic(
+      deviceId: string,
+      serviceUuid: string,
+      characteristicUuid: string,
+    ): Promise<number[]> {
+      return callValidated(
+        () => spec.readCharacteristic(deviceId, serviceUuid, characteristicUuid),
+        parseByteArray,
+        'read_failed',
+      );
+    },
+
+    writeCharacteristic(request: WriteCharacteristicRequest): Promise<void> {
+      return callVoid(
+        () =>
+          spec.writeCharacteristic(
+            request.deviceId,
+            request.serviceUuid,
+            request.characteristicUuid,
+            request.bytes,
+            request.mode === 'with_response',
+          ),
+        'write_failed',
+      );
+    },
+
     subscribe(listener: (event: NativeBleEvent) => void): Unsubscribe {
       const deliver = (candidate: unknown) => {
         const result = parseNativeBleEvent(candidate);
@@ -113,12 +141,13 @@ export function createNativeBleClient(spec: Spec): BleClient {
 async function callValidated<TRaw, TValue>(
   call: () => Promise<TRaw>,
   parse: (raw: unknown) => ValidationResult<TValue, Error>,
+  fallback: Parameters<typeof toBleError>[1] = 'native_failure',
 ): Promise<TValue> {
   let raw: TRaw;
   try {
     raw = await call();
   } catch (error) {
-    throw toBleError(error, 'native_failure');
+    throw toBleError(error, fallback);
   }
   const result = parse(raw);
   if (!result.ok) {

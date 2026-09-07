@@ -12,8 +12,9 @@
  *
  * Milestone scope: M0 added the adapter state API and its change event; M1 added
  * the permission API; M2 added scanning and the discovery/error events; M3 added
- * connections; M4 added service discovery. Later milestones extend this spec
- * (reads, writes, notifications) alongside the Swift and Kotlin implementations.
+ * connections; M4 added service discovery; M5 added reads and writes. Later
+ * milestones extend this spec (notifications) alongside the Swift and Kotlin
+ * implementations.
  */
 import { TurboModuleRegistry, type CodegenTypes, type TurboModule } from 'react-native';
 
@@ -130,6 +131,30 @@ export interface Spec extends TurboModule {
    * Rejects with disconnected unless the peripheral is `ready`.
    */
   discoverServices(deviceId: string): Promise<GattServicePayload[]>;
+
+  /**
+   * Reads a characteristic value as unsigned bytes. Queued behind other GATT
+   * operations on the same peripheral. Rejects with disconnected,
+   * characteristic_not_found or read_failed.
+   */
+  readCharacteristic(
+    deviceId: string,
+    serviceUuid: string,
+    characteristicUuid: string,
+  ): Promise<number[]>;
+
+  /**
+   * Writes unsigned bytes. `withResponse` waits for the peripheral's
+   * acknowledgement; without it the call resolves once the bytes are handed to
+   * the stack. Rejects with disconnected, characteristic_not_found or write_failed.
+   */
+  writeCharacteristic(
+    deviceId: string,
+    serviceUuid: string,
+    characteristicUuid: string,
+    bytes: number[],
+    withResponse: boolean,
+  ): Promise<void>;
 
   /** Emitted on every adapter state transition after module initialization. */
   readonly onBluetoothStateChanged: CodegenTypes.EventEmitter<BluetoothStateChangedEvent>;

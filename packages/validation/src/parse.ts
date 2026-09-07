@@ -10,7 +10,7 @@ import type { z } from 'zod';
 import { fail, ok, type ValidationResult } from './result';
 import { bluetoothStateSchema } from './schemas/bluetooth-state';
 import { gattServiceListSchema } from './schemas/gatt';
-import { rssiSchema } from './schemas/primitives';
+import { byteArraySchema, rssiSchema } from './schemas/primitives';
 import { nativeBleEventSchema } from './schemas/native-events';
 import { blePermissionStateSchema } from './schemas/permissions';
 
@@ -67,4 +67,8 @@ export function parseGattServices(
   input: unknown,
 ): ValidationResult<GattService[], BleError> {
   return validate(gattServiceListSchema, input, 'Invalid GATT services from native');
+}
+
+export function parseByteArray(input: unknown): ValidationResult<number[], BleError> {
+  return validate(byteArraySchema, input, 'Invalid bytes from native');
 }

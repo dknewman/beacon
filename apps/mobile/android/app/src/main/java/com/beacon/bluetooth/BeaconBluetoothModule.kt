@@ -8,6 +8,7 @@ import com.beacon.bluetooth.errors.rejectWith
 import com.beacon.bluetooth.errors.toBleError
 import com.beacon.bluetooth.mapping.BleAdapterState
 import com.beacon.bluetooth.mapping.BleConnectionState
+import com.beacon.bluetooth.mapping.ByteArrayMapper
 import com.beacon.bluetooth.mapping.DiscoveredDevice
 import com.beacon.bluetooth.mapping.DiscoveredService
 import com.beacon.bluetooth.permissions.PermissionController
@@ -17,6 +18,7 @@ import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReadableArray
+import com.facebook.react.bridge.ReadableType
 import com.facebook.react.bridge.WritableArray
 import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.PermissionAwareActivity
@@ -120,6 +122,33 @@ class BeaconBluetoothModule(reactContext: ReactApplicationContext) :
         }
     }
 
+    override fun readCharacteristic(deviceId: String, serviceUuid: String, characteristicUuid: String, promise: Promise) {
+        connections.readCharacteristic(deviceId, serviceUuid, characteristicUuid) { result ->
+            result.fold(
+                onSuccess = { promise.resolve(it.toWritableArray()) },
+                onFailure = { promise.rejectWith(it.toBleError(fallback = BleErrorCode.READ_FAILED)) },
+            )
+        }
+    }
+
+    override fun writeCharacteristic(
+        deviceId: String,
+        serviceUuid: String,
+        characteristicUuid: String,
+        bytes: ReadableArray,
+        withResponse: Boolean,
+        promise: Promise,
+    ) {
+        val payload = bytes.toNumbers()?.let(ByteArrayMapper::fromDoubles)
+        if (payload == null) {
+            promise.rejectWith(BleError(BleErrorCode.INVALID_PAYLOAD, "Bytes must be integers between 0 and 255"))
+            return
+        }
+        connections.writeCharacteristic(deviceId, serviceUuid, characteristicUuid, payload, withResponse) { error ->
+            if (error == null) promise.resolve(null) else promise.rejectWith(error)
+        }
+    }
+
     override fun onAdapterStateChanged(state: BleAdapterState) {
         // The emitter callback is bound by the TurboModule infrastructure once JavaScript
         // has resolved this module. Broadcasts before that have no subscriber to reach;
@@ -198,6 +227,20 @@ private fun List<DiscoveredService>.toWritableArray(): WritableArray =
             )
         }
     }
+
+/** The array's elements when every one is a number; null as soon as one is not. */
+private fun ReadableArray.toNumbers(): List<Double>? {
+    val values = ArrayList<Double>(size())
+    for (index in 0 until size()) {
+        if (getType(index) != ReadableType.Number) return null
+        values += getDouble(index)
+    }
+    return values
+}
+
+/** Bridge form of a characteristic value: unsigned bytes as `number[]`. */
+private fun ByteArray.toWritableArray(): WritableArray =
+    Arguments.createArray().apply { ByteArrayMapper.toUnsignedInts(this@toWritableArray).forEach { pushInt(it) } }
 
 /** Bridge form of [BleError]; matches `BleErrorPayload` in the codegen spec. */
 private fun BleError.toWritableMap(): WritableMap =

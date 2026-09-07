@@ -36,4 +36,18 @@ class GattStatusMapperTest {
         assertEquals("Service discovery failed (status 129)", error.message)
         assertEquals("129", error.nativeCode)
     }
+
+    @Test
+    fun `characteristic read and write failures keep their own codes`() {
+        val read = GattStatusMapper.operationFailure(BleErrorCode.READ_FAILED, "Characteristic read", BluetoothGatt.GATT_READ_NOT_PERMITTED)
+        assertEquals(BleErrorCode.READ_FAILED, read.code)
+        assertEquals("Characteristic read failed (status 2)", read.message)
+        assertEquals("2", read.nativeCode)
+        assertEquals("android.bluetooth.BluetoothGatt", read.nativeDomain)
+
+        val write = GattStatusMapper.operationFailure(BleErrorCode.WRITE_FAILED, "Characteristic write", BluetoothGatt.GATT_WRITE_NOT_PERMITTED)
+        assertEquals(BleErrorCode.WRITE_FAILED, write.code)
+        assertEquals("Characteristic write failed (status 3)", write.message)
+        assertEquals("3", write.nativeCode)
+    }
 }
