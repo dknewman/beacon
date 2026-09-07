@@ -19,6 +19,8 @@ import {
 export interface PacketLog {
   state: PacketLogState;
   record: (packet: BlePacket) => void;
+  /** Records a burst (oldest first) as one state update; used by the notification pipeline. */
+  recordMany: (packets: readonly BlePacket[]) => void;
   clear: (deviceId: string) => void;
   packetsOf: (deviceId: string) => readonly BlePacket[];
   packetsForCharacteristic: (
@@ -40,6 +42,9 @@ export function PacketLogProvider({ children }: PropsWithChildren): React.JSX.El
   const record = useCallback((packet: BlePacket) => {
     dispatch({ type: 'packet_recorded', packet });
   }, []);
+  const recordMany = useCallback((packets: readonly BlePacket[]) => {
+    dispatch({ type: 'packets_recorded', packets });
+  }, []);
   const clear = useCallback((deviceId: string) => {
     dispatch({ type: 'log_cleared', deviceId });
   }, []);
@@ -48,12 +53,13 @@ export function PacketLogProvider({ children }: PropsWithChildren): React.JSX.El
     () => ({
       state,
       record,
+      recordMany,
       clear,
       packetsOf: deviceId => packetsOf(state, deviceId),
       packetsForCharacteristic: (deviceId, serviceUuid, characteristicUuid) =>
         packetsForCharacteristic(state, deviceId, serviceUuid, characteristicUuid),
     }),
-    [state, record, clear],
+    [state, record, recordMany, clear],
   );
 
   return <PacketLogContext.Provider value={value}>{children}</PacketLogContext.Provider>;

@@ -27,9 +27,21 @@ export interface MockPeripheral {
    * characteristic without an entry reads as empty.
    */
   values?: Record<string, number[]>;
+  /**
+   * Characteristics that push values once subscribed, keyed by canonical UUID:
+   * how often, and what the n-th value is. Used for notify and indicate alike.
+   */
+  notifiers?: Record<string, MockNotifier>;
+}
+
+export interface MockNotifier {
+  intervalMs: number;
+  /** Builds the value for the `sequence`-th notification (0-based) with a random source. */
+  produce: (sequence: number, random: () => number) => number[];
 }
 
 const utf8 = (text: string): number[] => Array.from(text, char => char.charCodeAt(0));
+const clampByte = (value: number): number => Math.min(255, Math.max(0, value));
 
 export const HEART_RATE_SERVICE = '0000180D-0000-1000-8000-00805F9B34FB';
 export const BATTERY_SERVICE = '0000180F-0000-1000-8000-00805F9B34FB';
@@ -102,6 +114,21 @@ export const defaultMockPeripherals: MockPeripheral[] = [
       [sig('2A38')]: [0x01],
       [sig('2A19')]: [0x5c],
     },
+    notifiers: {
+      [sig('2A37')]: {
+        intervalMs: 1_000,
+        // Flags 0x10 (energy expended absent, contact detected) then an 8-bit BPM that
+        // drifts around a resting rate.
+        produce: (sequence, random) => [
+          0x00,
+          clampByte(72 + Math.round(Math.sin(sequence / 5) * 6 + (random() - 0.5) * 4)),
+        ],
+      },
+      [sig('2A19')]: {
+        intervalMs: 5_000,
+        produce: sequence => [clampByte(0x5c - Math.floor(sequence / 12))],
+      },
+    },
   },
   {
     id: 'MOCK-SCALE-0002',
@@ -129,6 +156,17 @@ export const defaultMockPeripherals: MockPeripheral[] = [
       [sig('2A9E')]: [0x38, 0x00, 0x00, 0x00],
       [sig('2A9B')]: [0xff, 0x0f, 0x00, 0x00],
       [sig('2A19')]: [0x2d],
+    },
+    notifiers: {
+      // Weight Measurement indication: flags 0x00 (SI, no timestamp), weight in
+      // units of 5 g little-endian; 72.5 kg = 14500 = 0x38A4.
+      [sig('2A9D')]: {
+        intervalMs: 2_000,
+        produce: (sequence, random) => {
+          const grams = 14_500 + Math.round((random() - 0.5) * 20) + (sequence % 3);
+          return [0x00, grams % 256, Math.floor(grams / 256)];
+        },
+      },
     },
   },
   {
@@ -173,6 +211,12 @@ export const defaultMockPeripherals: MockPeripheral[] = [
     ],
     values: {
       [sig('2A00')]: utf8('Nordic_UART'),
+    },
+    notifiers: {
+      ['6E400003-B5A3-F393-E0A9-E50E24DCCA9E']: {
+        intervalMs: 300,
+        produce: sequence => utf8(`tick ${sequence}\n`),
+      },
     },
   },
   {

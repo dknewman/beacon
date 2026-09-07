@@ -12,8 +12,8 @@
  *
  * Milestone scope: M0 added the adapter state API and its change event; M1 added
  * the permission API; M2 added scanning and the discovery/error events; M3 added
- * connections; M4 added service discovery; M5 added reads and writes. Later
- * milestones extend this spec (notifications) alongside the Swift and Kotlin
+ * connections; M4 added service discovery; M5 added reads and writes; M6 added
+ * notifications. Each addition lands alongside the Swift and Kotlin
  * implementations.
  */
 import { TurboModuleRegistry, type CodegenTypes, type TurboModule } from 'react-native';
@@ -58,6 +58,19 @@ export type GattServicePayload = {
   uuid: string;
   primary: boolean;
   characteristics: GattCharacteristicPayload[];
+};
+
+/**
+ * One notification or indication. `bytes` are unsigned 0..255; `timestamp` is
+ * the ISO-8601 instant native received the value, taken before the bridge hop
+ * so a burst keeps its order and spacing.
+ */
+export type CharacteristicValueChangedEvent = {
+  deviceId: string;
+  serviceUuid: string;
+  characteristicUuid: string;
+  bytes: number[];
+  timestamp: string;
 };
 
 /** Mirrors BleErrorInfo; `code` is a BleErrorCode wire value. */
@@ -156,6 +169,21 @@ export interface Spec extends TurboModule {
     withResponse: boolean,
   ): Promise<void>;
 
+  /**
+   * Enables or disables notifications (or indications, whichever the
+   * characteristic supports) and resolves once the peripheral has acknowledged
+   * the change. Values then arrive on onCharacteristicValueChanged. Queued
+   * behind other GATT operations on the same peripheral. Rejects with
+   * disconnected, characteristic_not_found or subscription_failed. Every
+   * subscription ends with the link.
+   */
+  setNotify(
+    deviceId: string,
+    serviceUuid: string,
+    characteristicUuid: string,
+    enabled: boolean,
+  ): Promise<void>;
+
   /** Emitted on every adapter state transition after module initialization. */
   readonly onBluetoothStateChanged: CodegenTypes.EventEmitter<BluetoothStateChangedEvent>;
 
@@ -164,6 +192,9 @@ export interface Spec extends TurboModule {
 
   /** Emitted for every per-device connection transition, including remote disconnects. */
   readonly onConnectionStateChanged: CodegenTypes.EventEmitter<ConnectionStateChangedEvent>;
+
+  /** Emitted for every notification or indication on a subscribed characteristic. */
+  readonly onCharacteristicValueChanged: CodegenTypes.EventEmitter<CharacteristicValueChangedEvent>;
 
   /**
    * Emitted for asynchronous failures: the scanner stopping itself (no deviceId),

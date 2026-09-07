@@ -33,6 +33,9 @@
     _manager.onConnectionStateChanged = ^(NSString *deviceId, NSString *state) {
       [weakSelf emitOnConnectionStateChanged:@{@"deviceId" : deviceId, @"state" : state}];
     };
+    _manager.onCharacteristicValueChanged = ^(NSDictionary<NSString *, id> *value) {
+      [weakSelf emitOnCharacteristicValueChanged:value];
+    };
     _manager.onError = ^(NSString *_Nullable deviceId, NSDictionary<NSString *, id> *error) {
       if (deviceId == nil) {
         [weakSelf emitOnBleError:@{@"error" : error}];
@@ -185,6 +188,22 @@
                          completion:^(NSDictionary<NSString *, id> *error) {
                            [BeaconBluetoothModule settle:error resolve:resolve reject:reject];
                          }];
+}
+
+- (void)setNotify:(NSString *)deviceId
+        serviceUuid:(NSString *)serviceUuid
+ characteristicUuid:(NSString *)characteristicUuid
+            enabled:(BOOL)enabled
+            resolve:(RCTPromiseResolveBlock)resolve
+             reject:(RCTPromiseRejectBlock)reject
+{
+  [self.manager setNotify:deviceId
+              serviceUuid:serviceUuid
+       characteristicUuid:characteristicUuid
+                  enabled:enabled
+               completion:^(NSDictionary<NSString *, id> *error) {
+                 [BeaconBluetoothModule settle:error resolve:resolve reject:reject];
+               }];
 }
 
 /// Resolves a void promise, or rejects it with the contract `code` and message from a

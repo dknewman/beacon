@@ -56,6 +56,39 @@ describe('packetLogReducer', () => {
     expect(packetsOf(state, 'a').map(item => item.bytes)).toEqual([[4], [3], [2]]);
   });
 
+  it('records a batch as one update, newest first, still capped', () => {
+    let state = packetLogReducer(initialPacketLogState, {
+      type: 'packet_recorded',
+      packet: packet('a', LEVEL, [0]),
+    });
+    expect(packetLogReducer(state, { type: 'packets_recorded', packets: [] })).toBe(
+      state,
+    );
+    state = packetLogReducer(
+      state,
+      {
+        type: 'packets_recorded',
+        packets: [
+          packet('a', LEVEL, [1]),
+          packet('b', LEVEL, [9]),
+          packet('a', LEVEL, [2]),
+        ],
+      },
+      3,
+    );
+    expect(packetsOf(state, 'a').map(item => item.bytes)).toEqual([[2], [1], [0]]);
+    expect(packetsOf(state, 'b').map(item => item.bytes)).toEqual([[9]]);
+    state = packetLogReducer(
+      state,
+      {
+        type: 'packets_recorded',
+        packets: [packet('a', LEVEL, [3]), packet('a', LEVEL, [4])],
+      },
+      3,
+    );
+    expect(packetsOf(state, 'a').map(item => item.bytes)).toEqual([[4], [3], [2]]);
+  });
+
   it('filters by characteristic and clears per device', () => {
     let state = packetLogReducer(initialPacketLogState, {
       type: 'packet_recorded',

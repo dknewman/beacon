@@ -3,6 +3,7 @@ import type {
   GattService,
   BluetoothState,
   NativeBleEvent,
+  NotificationRequest,
   ScanOptions,
   Unsubscribe,
   WriteCharacteristicRequest,
@@ -26,6 +27,7 @@ interface PendingCalls {
   discoverServices: Deferred<GattService[]>[];
   readCharacteristic: Deferred<number[]>[];
   writeCharacteristic: Deferred<void>[];
+  setNotify: Deferred<void>[];
 }
 
 /**
@@ -48,6 +50,7 @@ export class FakeBleClient implements BleClient {
     discoverServices: [],
     readCharacteristic: [],
     writeCharacteristic: [],
+    setNotify: [],
   };
 
   getBluetoothStateCalls = 0;
@@ -65,6 +68,7 @@ export class FakeBleClient implements BleClient {
     characteristicUuid: string;
   }> = [];
   writeCalls: WriteCharacteristicRequest[] = [];
+  setNotifyCalls: NotificationRequest[] = [];
 
   getBluetoothState(): Promise<BluetoothState> {
     this.getBluetoothStateCalls += 1;
@@ -123,6 +127,11 @@ export class FakeBleClient implements BleClient {
   writeCharacteristic(request: WriteCharacteristicRequest): Promise<void> {
     this.writeCalls.push(request);
     return this.defer('writeCharacteristic');
+  }
+
+  setNotify(request: NotificationRequest): Promise<void> {
+    this.setNotifyCalls.push(request);
+    return this.defer('setNotify');
   }
 
   subscribe(listener: (event: NativeBleEvent) => void): Unsubscribe {
@@ -222,6 +231,32 @@ export class FakeBleClient implements BleClient {
 
   rejectWrite(error: unknown): void {
     this.take('writeCharacteristic').forEach(d => d.reject(error));
+  }
+
+  resolveSetNotify(): void {
+    this.take('setNotify').forEach(d => d.resolve());
+  }
+
+  rejectSetNotify(error: unknown): void {
+    this.take('setNotify').forEach(d => d.reject(error));
+  }
+
+  /** Emits a notification as native would for a subscribed characteristic. */
+  emitValue(
+    deviceId: string,
+    serviceUuid: string,
+    characteristicUuid: string,
+    bytes: number[],
+    timestamp = new Date().toISOString(),
+  ): void {
+    this.emit({
+      type: 'characteristic.value_changed',
+      deviceId,
+      serviceUuid,
+      characteristicUuid,
+      bytes,
+      timestamp,
+    });
   }
 
   /** Emits the native transition sequence for a connection that reaches `ready`. */

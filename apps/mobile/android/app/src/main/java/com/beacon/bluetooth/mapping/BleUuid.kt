@@ -3,14 +3,22 @@ package com.beacon.bluetooth.mapping
 import java.util.UUID
 
 /**
- * Parses the service UUID strings JavaScript passes to `startScan`. Accepts 16-bit ("180D"),
- * 32-bit ("0000180D"), unhyphenated 128-bit and hyphenated 128-bit forms, case-insensitively.
- * Returns null for anything else instead of throwing, so an invalid filter becomes a clean
- * `scan_failed` rejection rather than a crash.
+ * Converts between the UUID strings on the bridge and the platform's `UUID`.
+ *
+ * [parse] accepts the strings JavaScript passes (scan filters, service and characteristic
+ * identifiers) in 16-bit ("180D"), 32-bit ("0000180D"), unhyphenated 128-bit and hyphenated
+ * 128-bit forms, case-insensitively. It returns null for anything else instead of throwing,
+ * so an invalid identifier becomes a clean contract rejection rather than a crash.
+ *
+ * [format] produces the one form the module reports (scan results, the GATT table, value
+ * events), so JavaScript can match them by string equality.
  */
 object BleUuid {
     private const val BASE_UUID_SUFFIX = "-0000-1000-8000-00805F9B34FB"
     private val HEX = Regex("^[0-9A-F]+$")
+
+    /** The wire form of a platform UUID: hyphenated 128-bit, uppercase. */
+    fun format(uuid: UUID): String = uuid.toString().uppercase()
 
     fun parse(value: String): UUID? {
         val cleaned = value.trim().uppercase().removePrefix("0X")

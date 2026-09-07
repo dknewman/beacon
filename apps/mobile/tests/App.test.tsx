@@ -49,8 +49,8 @@ describe('App (adapter + permission readiness)', () => {
     await render(<App bleClient={client} />);
 
     expect(readiness()).toHaveTextContent('Checking');
-    // Adapter hook, scan coordinator and connection coordinator each subscribe once.
-    expect(client.listenerCount).toBe(3);
+    // Adapter hook, scan, connection and subscription coordinators each subscribe once.
+    expect(client.listenerCount).toBe(4);
     expect(client.getBluetoothStateCalls).toBe(1);
     expect(client.getPermissionStateCalls).toBe(1);
 
@@ -228,7 +228,7 @@ describe('App (adapter + permission readiness)', () => {
   it('removes native subscriptions on unmount', async () => {
     const client = new FakeBleClient();
     const view = await render(<App bleClient={client} />);
-    expect(client.listenerCount).toBe(3);
+    expect(client.listenerCount).toBe(4);
     await view.unmount();
     expect(client.listenerCount).toBe(0);
     // Late native responses after unmount must not throw or update state.
@@ -953,7 +953,7 @@ describe('App (GATT discovery)', () => {
 });
 
 /** Connects, resolves the heart-rate table and opens one characteristic. */
-async function openCharacteristic(shortUuid: '2A00' | '2A39') {
+async function openCharacteristic(shortUuid: '2A00' | '2A37' | '2A39') {
   const client = await openConnected();
   await act(async () => {
     client.resolveServices(heartRateTable);
@@ -994,7 +994,7 @@ describe('App (characteristic read and write)', () => {
     expect(screen.getByTestId('operation-status-value')).toHaveTextContent('Read');
     expect(screen.getByTestId('operation-status')).toHaveTextContent(/Read 5 bytes\./);
     expect(screen.getByTestId('characteristic-value-source')).toHaveTextContent(
-      /^Read at \d\d:\d\d:\d\d\.\d\d\d · 5 bytes$/,
+      /^Received at \d\d:\d\d:\d\d\.\d\d\d · 5 bytes$/,
     );
     expect(screen.getByTestId('value-hex')).toHaveTextContent('51 4E 2D C3 A9');
     expect(screen.getByTestId('value-decimal')).toHaveTextContent('81 78 45 195 169');
@@ -1195,5 +1195,191 @@ describe('App (characteristic read and write)', () => {
     });
     expect(screen.getByTestId('operation-status-value')).toHaveTextContent('Read failed');
     expect(screen.getByTestId('operation-status')).toHaveTextContent(/\(disconnected\)/);
+  });
+});
+
+const HR_MEASUREMENT = '00002A37-0000-1000-8000-00805F9B34FB';
+const subscriptionStatus = () => screen.getByTestId('subscription-status-value');
+const subscribeButton = () => screen.getByTestId('characteristic-subscribe');
+
+describe('App (notifications)', () => {
+  it('subscribes, batches incoming values into the log and unsubscribes', async () => {
+    jest.useFakeTimers();
+    try {
+      const client = await openCharacteristic('2A37');
+      expect(subscriptionStatus()).toHaveTextContent('Off');
+      expect(subscribeButton()).toHaveTextContent('Subscribe');
+      expect(subscribeButton()).toBeEnabled();
+      expect(screen.queryByTestId('characteristic-read')).toBeNull();
+
+      await fireEvent.press(subscribeButton());
+      expect(client.setNotifyCalls).toEqual([
+        {
+          deviceId: 'scale',
+          serviceUuid: HEART_RATE,
+          characteristicUuid: HR_MEASUREMENT,
+          enabled: true,
+        },
+      ]);
+      expect(subscriptionStatus()).toHaveTextContent('Subscribing…');
+      expect(subscribeButton()).toBeDisabled();
+      await act(async () => {
+        client.resolveSetNotify();
+      });
+      expect(subscriptionStatus()).toHaveTextContent('On');
+      expect(screen.getByTestId('subscription-status')).toHaveTextContent(
+        /0 notifications received/,
+      );
+      expect(subscribeButton()).toHaveTextContent('Unsubscribe');
+
+      // A burst inside one flush window lands as one update, in order.
+      await act(async () => {
+        client.emitValue(
+          'scale',
+          HEART_RATE,
+          HR_MEASUREMENT,
+          [0x00, 0x48],
+          '2026-09-07T10:00:00.010Z',
+        );
+        client.emitValue(
+          'scale',
+          HEART_RATE,
+          HR_MEASUREMENT,
+          [0x00, 0x49],
+          '2026-09-07T10:00:00.020Z',
+        );
+        client.emitValue(
+          'scale',
+          HEART_RATE,
+          HR_MEASUREMENT,
+          [0x00, 0x4a],
+          '2026-09-07T10:00:00.030Z',
+        );
+      });
+      expect(screen.getByTestId('packet-list-empty')).toBeOnTheScreen();
+      await act(async () => {
+        jest.advanceTimersByTime(100);
+      });
+      expect(screen.getByTestId('subscription-status')).toHaveTextContent(
+        /3 notifications received/,
+      );
+      expect(screen.getByTestId('packet-list')).toHaveTextContent(/Packets \(3\)/);
+      expect(screen.getByTestId('packet-0-hex')).toHaveTextContent('00 4A');
+      expect(screen.getByTestId('packet-2-hex')).toHaveTextContent('00 48');
+      expect(screen.getByTestId('value-hex')).toHaveTextContent('00 4A');
+      expect(screen.getByTestId('value-decimal')).toHaveTextContent('0 74');
+      expect(screen.getByTestId('characteristic-value-source')).toHaveTextContent(
+        /^Received at/,
+      );
+
+      await fireEvent.press(subscribeButton());
+      expect(client.setNotifyCalls[1]).toMatchObject({ enabled: false });
+      expect(subscriptionStatus()).toHaveTextContent('Unsubscribing…');
+      await act(async () => {
+        client.resolveSetNotify();
+      });
+      expect(subscriptionStatus()).toHaveTextContent('Off');
+      expect(subscribeButton()).toHaveTextContent('Subscribe');
+      // The history stays after unsubscribing.
+      expect(screen.getByTestId('packet-list')).toHaveTextContent(/Packets \(3\)/);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('keeps the screen to one update per flush window under a fast stream', async () => {
+    jest.useFakeTimers();
+    try {
+      const client = await openCharacteristic('2A37');
+      await fireEvent.press(subscribeButton());
+      await act(async () => {
+        client.resolveSetNotify();
+      });
+      await act(async () => {
+        for (let index = 0; index < 25; index += 1) {
+          client.emitValue('scale', HEART_RATE, HR_MEASUREMENT, [0x00, index]);
+        }
+        jest.advanceTimersByTime(99);
+      });
+      expect(screen.getByTestId('packet-list-empty')).toBeOnTheScreen();
+      await act(async () => {
+        jest.advanceTimersByTime(1);
+      });
+      expect(screen.getByTestId('packet-list')).toHaveTextContent(
+        /Packets \(25, latest 20\)/,
+      );
+      expect(screen.getByTestId('packet-0-hex')).toHaveTextContent('00 18');
+      expect(screen.getByTestId('subscription-status')).toHaveTextContent(
+        /25 notifications received/,
+      );
+      expect(screen.queryByTestId('packet-20')).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('reports a failed subscription with its code and allows a retry', async () => {
+    const client = await openCharacteristic('2A37');
+    await fireEvent.press(subscribeButton());
+    await act(async () => {
+      client.rejectSetNotify(
+        Object.assign(new Error('Descriptor write failed (status 133)'), {
+          code: 'subscription_failed',
+        }),
+      );
+    });
+    expect(subscriptionStatus()).toHaveTextContent('Failed');
+    expect(screen.getByTestId('subscription-status')).toHaveTextContent(
+      /Descriptor write failed \(status 133\) \(subscription_failed\)/,
+    );
+    expect(subscribeButton()).toHaveTextContent('Subscribe');
+    expect(subscribeButton()).toBeEnabled();
+
+    await fireEvent.press(subscribeButton());
+    expect(client.setNotifyCalls).toHaveLength(2);
+    expect(subscriptionStatus()).toHaveTextContent('Subscribing…');
+  });
+
+  it('drops the subscription when the link ends and disables the control', async () => {
+    const client = await openCharacteristic('2A37');
+    await fireEvent.press(subscribeButton());
+    await act(async () => {
+      client.resolveSetNotify();
+    });
+    expect(subscriptionStatus()).toHaveTextContent('On');
+    await act(async () => {
+      client.emit({
+        type: 'ble.error',
+        deviceId: 'scale',
+        error: { code: 'disconnected', message: 'The peripheral closed the connection' },
+      });
+      client.emit({
+        type: 'connection.state_changed',
+        deviceId: 'scale',
+        state: 'disconnected',
+      });
+    });
+    // The table went with the link, so the control is gone and the reason shows.
+    expect(screen.queryByTestId('characteristic-subscribe')).toBeNull();
+    expect(screen.getByTestId('characteristic-properties-value')).toHaveTextContent(
+      'Not connected',
+    );
+    expect(client.setNotifyCalls).toHaveLength(1);
+
+    // Reconnecting starts from off: native dropped the subscription with the link.
+    await fireEvent.press(screen.getByTestId('characteristic-back'));
+    await fireEvent.press(screen.getByTestId('gatt-back'));
+    await fireEvent.press(connectionAction());
+    await act(async () => {
+      client.emitConnected('scale');
+      client.resolveConnect();
+    });
+    await act(async () => {
+      client.resolveServices(heartRateTable);
+    });
+    await fireEvent.press(screen.getByTestId('inspect-gatt'));
+    await fireEvent.press(screen.getByTestId('characteristic-2A37'));
+    expect(subscriptionStatus()).toHaveTextContent('Off');
+    expect(subscribeButton()).toBeEnabled();
   });
 });

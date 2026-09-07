@@ -4,6 +4,7 @@ import {
   type BluetoothState,
   type GattService,
   type NativeBleEvent,
+  type NotificationRequest,
   type ScanOptions,
   type Unsubscribe,
   type WriteCharacteristicRequest,
@@ -98,6 +99,19 @@ export function createNativeBleClient(spec: Spec): BleClient {
       );
     },
 
+    setNotify(request: NotificationRequest): Promise<void> {
+      return callVoid(
+        () =>
+          spec.setNotify(
+            request.deviceId,
+            request.serviceUuid,
+            request.characteristicUuid,
+            request.enabled,
+          ),
+        'subscription_failed',
+      );
+    },
+
     subscribe(listener: (event: NativeBleEvent) => void): Unsubscribe {
       const deliver = (candidate: unknown) => {
         const result = parseNativeBleEvent(candidate);
@@ -117,6 +131,16 @@ export function createNativeBleClient(spec: Spec): BleClient {
             type: 'connection.state_changed',
             deviceId: payload.deviceId,
             state: payload.state,
+          });
+        }),
+        spec.onCharacteristicValueChanged(payload => {
+          deliver({
+            type: 'characteristic.value_changed',
+            deviceId: payload.deviceId,
+            serviceUuid: payload.serviceUuid,
+            characteristicUuid: payload.characteristicUuid,
+            bytes: payload.bytes,
+            timestamp: payload.timestamp,
           });
         }),
         spec.onBleError(payload => {

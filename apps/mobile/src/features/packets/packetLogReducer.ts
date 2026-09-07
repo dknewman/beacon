@@ -10,6 +10,8 @@ export type PacketLogState = Readonly<Record<string, readonly BlePacket[]>>;
 
 export type PacketLogAction =
   | { type: 'packet_recorded'; packet: BlePacket }
+  /** A flushed notification batch, oldest first; one state update for the whole burst. */
+  | { type: 'packets_recorded'; packets: readonly BlePacket[] }
   | { type: 'log_cleared'; deviceId: string };
 
 export const initialPacketLogState: PacketLogState = {};
@@ -26,6 +28,23 @@ export function packetLogReducer(
       const existing = state[action.packet.deviceId] ?? [];
       const next = [action.packet, ...existing.slice(0, Math.max(0, capacity - 1))];
       return { ...state, [action.packet.deviceId]: next };
+    }
+    case 'packets_recorded': {
+      if (action.packets.length === 0) {
+        return state;
+      }
+      const byDevice = new Map<string, BlePacket[]>();
+      for (const packet of action.packets) {
+        const bucket = byDevice.get(packet.deviceId) ?? [];
+        bucket.push(packet);
+        byDevice.set(packet.deviceId, bucket);
+      }
+      const next = { ...state };
+      byDevice.forEach((packets, deviceId) => {
+        const existing = state[deviceId] ?? [];
+        next[deviceId] = [...packets.reverse(), ...existing].slice(0, capacity);
+      });
+      return next;
     }
     case 'log_cleared': {
       if (state[action.deviceId] === undefined) {
