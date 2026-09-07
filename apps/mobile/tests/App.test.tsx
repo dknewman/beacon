@@ -1,6 +1,13 @@
 import React from 'react';
 import { AppState, Linking, type AppStateStatus } from 'react-native';
-import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react-native';
 import type {
   BleDevice,
   GattService,
@@ -286,11 +293,9 @@ function advertisement(
 }
 
 /** Renders, settles readiness as ready, and starts a scan that native has accepted. */
-async function renderScanning() {
+async function renderScanning(sessionRepository = new InMemorySessionRepository()) {
   const client = new FakeBleClient();
-  await render(
-    <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
-  );
+  await render(<App bleClient={client} sessionRepository={sessionRepository} />);
   await settle(client);
   await fireEvent.press(scanButton());
   await act(async () => {
@@ -553,8 +558,12 @@ const connectionStatus = () => screen.getByTestId('connection-status-value');
 const connectionAction = () => screen.getByTestId('connection-action');
 
 /** Scans, discovers one device, and opens its detail screen. */
-async function openDetail(id = 'scale', overrides: Partial<BleDevice> = {}) {
-  const client = await renderScanning();
+async function openDetail(
+  id = 'scale',
+  overrides: Partial<BleDevice> = {},
+  sessionRepository = new InMemorySessionRepository(),
+) {
+  const client = await renderScanning(sessionRepository);
   await act(async () => {
     client.emit(advertisement(id, { name: 'QN Scale', rssi: -47, ...overrides }));
   });
@@ -1488,5 +1497,259 @@ describe('App (parsed values)', () => {
     expect(screen.getByTestId('value-hex')).toHaveTextContent('01');
     expect(screen.queryByTestId('parsed')).toBeNull();
     expect(screen.queryByTestId('packet-0-parsed')).toBeNull();
+  });
+});
+
+const sessionStatus = () => screen.getByTestId('session-value');
+const sessionAction = () => screen.getByTestId('session-action');
+
+/**
+ * Starts a session on the detail screen, connects, reads RSSI, discovers the
+ * heart-rate table, subscribes to 2A37, receives two values and stops. Leaves
+ * the app on the device detail with the session closed.
+ */
+async function recordHeartRateSession(client: FakeBleClient) {
+  expect(sessionStatus()).toHaveTextContent('Not recording');
+  expect(screen.getByTestId('session')).toHaveTextContent(/Press Start session/);
+  expect(sessionAction()).toHaveTextContent('Start session');
+
+  await fireEvent.press(sessionAction());
+  await waitFor(() => expect(sessionStatus()).toHaveTextContent('Recording'));
+  expect(screen.getByTestId('session')).toHaveTextContent(/0 events · 0 packets/);
+  expect(sessionAction()).toHaveTextContent('Stop session');
+
+  await fireEvent.press(connectionAction());
+  await act(async () => {
+    client.emitConnected('scale');
+    client.resolveConnect();
+  });
+  expect(connectionStatus()).toHaveTextContent('Ready');
+  await act(async () => {
+    client.resolveRssi(-58);
+  });
+  await act(async () => {
+    client.resolveServices(heartRateTable);
+  });
+  await waitFor(() =>
+    expect(screen.getByTestId('session')).toHaveTextContent(/6 events · 0 packets/),
+  );
+
+  await fireEvent.press(screen.getByTestId('inspect-gatt'));
+  await fireEvent.press(screen.getByTestId('characteristic-2A37'));
+  await fireEvent.press(subscribeButton());
+  await act(async () => {
+    client.resolveSetNotify();
+  });
+  await act(async () => {
+    client.emitValue('scale', HEART_RATE, HR_MEASUREMENT, [0x00, 0x48]);
+    client.emitValue('scale', HEART_RATE, HR_MEASUREMENT, [0x00, 0x49]);
+  });
+  await waitFor(() =>
+    expect(screen.getByTestId('packet-list')).toHaveTextContent(/Packets \(2\)/),
+  );
+
+  await fireEvent.press(screen.getByTestId('characteristic-back'));
+  await fireEvent.press(screen.getByTestId('gatt-back'));
+  await waitFor(() =>
+    expect(screen.getByTestId('session')).toHaveTextContent(/9 events · 2 packets/),
+  );
+
+  await fireEvent.press(sessionAction());
+  await waitFor(() => expect(sessionStatus()).toHaveTextContent('Not recording'));
+  expect(screen.getByTestId('session')).toHaveTextContent(
+    /Last session: 9 events, 2 packets\./,
+  );
+  expect(sessionAction()).toHaveTextContent('Start session');
+}
+
+describe('App (session recording)', () => {
+  it('records the link, discovery, subscription and notifications between start and stop', async () => {
+    const repository = new InMemorySessionRepository();
+    const client = await openDetail('scale', {}, repository);
+    await recordHeartRateSession(client);
+
+    const sessions = await repository.listSessions();
+    expect(sessions).toHaveLength(1);
+    const [session] = sessions;
+    expect(session).toMatchObject({
+      deviceId: 'scale',
+      deviceName: 'QN Scale',
+      eventCount: 9,
+      packetCount: 2,
+    });
+    expect(session?.endedAt).toBeDefined();
+    const events = await repository.listEvents(session?.id ?? '');
+    expect(events.map(event => event.kind)).toEqual([
+      'connection',
+      'connection',
+      'connection',
+      'connection',
+      'rssi',
+      'services_discovered',
+      'subscription',
+      'notification',
+      'notification',
+    ]);
+    expect(events.map(event => event.sequence)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(events[0]).toMatchObject({ kind: 'connection', state: 'connecting' });
+    expect(events[3]).toMatchObject({ kind: 'connection', state: 'ready' });
+    expect(events[4]).toMatchObject({ kind: 'rssi', rssi: -58 });
+    expect(events[5]).toMatchObject({ serviceCount: 3, characteristicCount: 3 });
+    expect(events[6]).toMatchObject({
+      characteristicUuid: HR_MEASUREMENT,
+      enabled: true,
+    });
+    expect(events[7]).toMatchObject({ bytes: [0x00, 0x48] });
+    expect(events[8]).toMatchObject({ bytes: [0x00, 0x49] });
+  });
+
+  it('lists the session for the device, shows statistics and the timeline, and deletes it', async () => {
+    const repository = new InMemorySessionRepository();
+    const client = await openDetail('scale', {}, repository);
+    await recordHeartRateSession(client);
+    const [session] = await repository.listSessions();
+    const id = session?.id ?? '';
+
+    await fireEvent.press(screen.getByTestId('session-history'));
+    expect(screen.getByTestId('sessions-title')).toHaveTextContent('Sessions · QN Scale');
+    await waitFor(() => expect(screen.getByTestId(`session-${id}`)).toBeOnTheScreen());
+    expect(screen.getByTestId(`session-${id}-title`)).toHaveTextContent('QN Scale');
+    expect(screen.getByTestId(`session-${id}-subtitle`)).toHaveTextContent(
+      /^\d{1,2} \w{3} \d{4}, \d\d:\d\d:\d\d · \d+ s · 2 packets$/,
+    );
+    expect(screen.queryByTestId(`session-${id}-badge`)).toBeNull();
+
+    await fireEvent.press(screen.getByTestId(`session-${id}`));
+    await waitFor(() =>
+      expect(screen.getByTestId('session-detail-title')).toHaveTextContent('QN Scale'),
+    );
+    expect(screen.getByTestId('stat-duration-value')).toHaveTextContent(/^\d+ s$/);
+    expect(screen.getByTestId('stat-events-value')).toHaveTextContent('9');
+    expect(screen.getByTestId('stat-packets-value')).toHaveTextContent('2');
+    expect(screen.getByTestId('stat-bytes-value')).toHaveTextContent(
+      '4 received, 0 sent',
+    );
+    expect(screen.getByTestId('stat-rate-value')).toHaveTextContent(/per second$/);
+    expect(screen.getByTestId('stat-rssi-value')).toHaveTextContent(
+      '-58 dBm average, -58 to -58 dBm over 1 sample',
+    );
+    expect(screen.getByTestId('characteristic-stat-2A37')).toHaveTextContent(
+      /180D \/ 2A37.*0 reads · 0 writes · 2 notifications · 4 bytes/,
+    );
+
+    expect(screen.getByTestId('event-1')).toHaveTextContent(/^\d\d:\d\d:\d\d\.\d\d\d/);
+    expect(screen.getByTestId('event-1-title')).toHaveTextContent('CONNECTING');
+    expect(screen.getByTestId('event-2-title')).toHaveTextContent('CONNECTED');
+    expect(screen.getByTestId('event-3-title')).toHaveTextContent('DISCOVERING SERVICES');
+    expect(screen.getByTestId('event-4-title')).toHaveTextContent('READY');
+    expect(screen.getByTestId('event-5-title')).toHaveTextContent('RSSI');
+    expect(screen.getByTestId('event-5-detail')).toHaveTextContent('-58 dBm');
+    expect(screen.getByTestId('event-6-title')).toHaveTextContent('SERVICES DISCOVERED');
+    expect(screen.getByTestId('event-6-detail')).toHaveTextContent(
+      '3 services, 3 characteristics',
+    );
+    expect(screen.getByTestId('event-7-title')).toHaveTextContent('SUBSCRIBED');
+    expect(screen.getByTestId('event-7-detail')).toHaveTextContent('180D / 2A37');
+    expect(screen.getByTestId('event-8-title')).toHaveTextContent('NOTIFICATION');
+    expect(screen.getByTestId('event-8-detail')).toHaveTextContent('180D / 2A37 · 00 48');
+    expect(screen.getByTestId('event-9-detail')).toHaveTextContent('180D / 2A37 · 00 49');
+    expect(screen.queryByTestId('event-10')).toBeNull();
+
+    expect(screen.getByTestId('session-delete')).toBeEnabled();
+    expect(screen.queryByTestId('session-delete-hint')).toBeNull();
+    await fireEvent.press(screen.getByTestId('session-delete'));
+    await waitFor(() => expect(screen.getByTestId('sessions-empty')).toBeOnTheScreen());
+    expect(screen.getByTestId('sessions-empty')).toHaveTextContent(
+      'No sessions recorded for this device yet.',
+    );
+    expect(await repository.listSessions()).toEqual([]);
+
+    await fireEvent.press(screen.getByTestId('sessions-back'));
+    expect(screen.getByTestId('device-detail')).toBeOnTheScreen();
+  });
+
+  it('shows a live session with a badge, grows its timeline and refuses to delete it', async () => {
+    const repository = new InMemorySessionRepository();
+    const client = await openDetail('scale', {}, repository);
+    await fireEvent.press(sessionAction());
+    await waitFor(() => expect(sessionStatus()).toHaveTextContent('Recording'));
+    const [session] = await repository.listSessions();
+    const id = session?.id ?? '';
+
+    await fireEvent.press(screen.getByTestId('session-history'));
+    await waitFor(() =>
+      expect(screen.getByTestId(`session-${id}-badge`)).toHaveTextContent('Recording'),
+    );
+    expect(screen.getByTestId(`session-${id}-subtitle`)).toHaveTextContent(
+      /· Recording · 0 packets$/,
+    );
+
+    await fireEvent.press(screen.getByTestId(`session-${id}`));
+    await waitFor(() => expect(screen.getByTestId('timeline-empty')).toBeOnTheScreen());
+    expect(screen.getByTestId('stat-duration-value')).toHaveTextContent(/so far$/);
+    expect(screen.getByTestId('session-delete')).toBeDisabled();
+    expect(screen.getByTestId('session-delete-hint')).toHaveTextContent(
+      /Stop the session/,
+    );
+
+    // Activity on the link while the detail is open lands in the timeline.
+    await act(async () => {
+      client.emit({
+        type: 'connection.state_changed',
+        deviceId: 'scale',
+        state: 'connecting',
+      });
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('event-1-title')).toHaveTextContent('CONNECTING'),
+    );
+    expect(screen.queryByTestId('timeline-empty')).toBeNull();
+    expect(screen.getByTestId('stat-events-value')).toHaveTextContent('1');
+  });
+
+  it('opens the history from the device list and shows the empty state', async () => {
+    const client = new FakeBleClient();
+    await render(
+      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+    );
+    await settle(client);
+
+    await fireEvent.press(screen.getByTestId('open-sessions'));
+    expect(screen.getByTestId('sessions-title')).toHaveTextContent('Sessions');
+    await waitFor(() => expect(screen.getByTestId('sessions-empty')).toBeOnTheScreen());
+    expect(screen.getByTestId('sessions-empty')).toHaveTextContent(
+      /No sessions recorded yet/,
+    );
+
+    await fireEvent.press(screen.getByTestId('sessions-back'));
+    expect(screen.getByTestId('device-list')).toBeOnTheScreen();
+  });
+
+  it('reports a history that cannot be read and recovers on retry', async () => {
+    const repository = new InMemorySessionRepository();
+    const listSessions = repository.listSessions.bind(repository);
+    let available = false;
+    jest
+      .spyOn(repository, 'listSessions')
+      .mockImplementation(() =>
+        available ? listSessions() : Promise.reject(new Error('Storage unavailable')),
+      );
+    const client = new FakeBleClient();
+    await render(<App bleClient={client} sessionRepository={repository} />);
+    await settle(client);
+
+    await fireEvent.press(screen.getByTestId('open-sessions'));
+    await waitFor(() =>
+      expect(screen.getByTestId('sessions-failed-value')).toHaveTextContent('Failed'),
+    );
+    expect(screen.getByTestId('sessions-failed')).toHaveTextContent(
+      /Storage unavailable/,
+    );
+    expect(screen.queryByTestId('sessions-empty')).toBeNull();
+
+    available = true;
+    await fireEvent.press(screen.getByTestId('sessions-retry'));
+    await waitFor(() => expect(screen.getByTestId('sessions-empty')).toBeOnTheScreen());
+    expect(screen.queryByTestId('sessions-failed')).toBeNull();
   });
 });

@@ -244,6 +244,45 @@ describe('SessionRecorderProvider', () => {
     );
   });
 
+  it('recovers only on mount, never closing the session it is recording', async () => {
+    const repository = new InMemorySessionRepository();
+    const endSession = jest.spyOn(repository, 'endSession');
+    // Default callbacks: their identity must not change between renders.
+    const wrapper = ({ children }: PropsWithChildren) => (
+      <ActivityBusProvider bus={bus}>
+        <SessionRecorderProvider repository={repository} flushIntervalMs={5}>
+          {children}
+        </SessionRecorderProvider>
+      </ActivityBusProvider>
+    );
+    const bus = createActivityBus();
+    const { result } = await renderHook(() => useSessionRecorder(), { wrapper });
+
+    await act(async () => {
+      result.current.startSession('dev');
+    });
+    await waitFor(() =>
+      expect(result.current.recordingOf('dev').phase).toBe('recording'),
+    );
+    // Each acknowledged append re-renders the provider.
+    await act(async () => {
+      bus.publish({ deviceId: 'dev', ...rssi(-40) });
+    });
+    await waitFor(() =>
+      expect(result.current.recordingOf('dev')).toMatchObject({ eventCount: 1 }),
+    );
+    await act(async () => {
+      bus.publish({ deviceId: 'dev', ...rssi(-41) });
+    });
+    await waitFor(() =>
+      expect(result.current.recordingOf('dev')).toMatchObject({ eventCount: 2 }),
+    );
+
+    expect(endSession).not.toHaveBeenCalled();
+    const [session] = await repository.listSessions();
+    expect(session?.endedAt).toBeUndefined();
+  });
+
   it('records for two devices independently', async () => {
     const { result, repository, bus } = await setup();
     await act(async () => {
