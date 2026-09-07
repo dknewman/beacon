@@ -13,6 +13,11 @@ import { useTheme } from '../../theme/useTheme';
 import { useConnections } from '../connection/ConnectionProvider';
 import { usePacketLog } from '../packets/PacketLogProvider';
 import { formatPacketTime, labelPacket } from '../packets/packetPresentation';
+import {
+  describeSubscription,
+  type SubscriptionPhase,
+} from '../subscriptions/subscriptionReducer';
+import { useSubscriptions } from '../subscriptions/SubscriptionProvider';
 import { describeBusy, describeOutcome } from './characteristicOperations';
 import { describeProperties, labelCharacteristic } from './gattLabels';
 import { useGatt } from './GattProvider';
@@ -39,6 +44,12 @@ export function CharacteristicDetailScreen(): React.JSX.Element {
   const connection = useConnections().connectionOf(params.deviceId);
   const status = gatt.statusOf(params.deviceId);
   const packetLog = usePacketLog();
+  const subscriptions = useSubscriptions();
+  const subscription = subscriptions.subscriptionOf(
+    params.deviceId,
+    params.serviceUuid,
+    params.characteristicUuid,
+  );
   const operations = useCharacteristicOperations(
     params.deviceId,
     params.serviceUuid,
@@ -67,7 +78,11 @@ export function CharacteristicDetailScreen(): React.JSX.Element {
   const canRead = properties.includes('read');
   const canWrite =
     properties.includes('write') || properties.includes('write_without_response');
+  const canNotify = properties.includes('notify') || properties.includes('indicate');
   const outcome = operations.state.lastOutcome;
+  const subscriptionLabel = describeSubscription(subscription);
+  const subscriptionBusy =
+    subscription.phase === 'subscribing' || subscription.phase === 'unsubscribing';
 
   return (
     <ScrollView
@@ -177,12 +192,43 @@ export function CharacteristicDetailScreen(): React.JSX.Element {
         />
       ) : null}
 
-      {(canRead || canWrite) && !ready ? (
+      {canNotify ? (
+        <>
+          <StatusRow
+            label="Notifications"
+            value={subscriptionLabel.value}
+            detail={subscriptionLabel.detail}
+            testID="subscription-status"
+          />
+          <PrimaryButton
+            label={subscribeButtonLabel(subscription.phase)}
+            accessibilityLabel={`${subscribeButtonLabel(subscription.phase)} ${label?.title ?? 'characteristic'}`}
+            onPress={() =>
+              subscription.phase === 'on'
+                ? subscriptions.unsubscribe(
+                    params.deviceId,
+                    params.serviceUuid,
+                    params.characteristicUuid,
+                  )
+                : subscriptions.subscribe(
+                    params.deviceId,
+                    params.serviceUuid,
+                    params.characteristicUuid,
+                  )
+            }
+            disabled={!ready || subscriptionBusy}
+            testID="characteristic-subscribe"
+          />
+        </>
+      ) : null}
+
+      {(canRead || canWrite || canNotify) && !ready ? (
         <Text
           style={[styles.hint, { color: theme.colors.textSecondary }]}
           testID="characteristic-hint"
         >
-          Reads and writes need a ready connection. Reconnect from the device screen.
+          Reads, writes and subscriptions need a ready connection. Reconnect from the
+          device screen.
         </Text>
       ) : null}
 
@@ -206,7 +252,8 @@ export function CharacteristicDetailScreen(): React.JSX.Element {
             style={[styles.hint, { color: theme.colors.textSecondary }]}
             testID="packet-list-empty"
           >
-            No packets yet. Reads and writes for this characteristic are listed here.
+            No packets yet. Reads, writes and notifications for this characteristic are
+            listed here.
           </Text>
         ) : (
           packets.slice(0, RECENT_PACKETS).map((packet, index) => {
@@ -250,9 +297,22 @@ function describeLatest(
   timestamp: string,
   byteCount: number,
 ): string {
-  const verb = direction === 'incoming' ? 'Read' : 'Written';
+  const verb = direction === 'incoming' ? 'Received' : 'Written';
   const count = byteCount === 1 ? '1 byte' : `${byteCount} bytes`;
   return `${verb} at ${formatPacketTime(timestamp)} · ${count}`;
+}
+
+function subscribeButtonLabel(phase: SubscriptionPhase): string {
+  switch (phase) {
+    case 'off':
+      return 'Subscribe';
+    case 'subscribing':
+      return 'Subscribing…';
+    case 'on':
+      return 'Unsubscribe';
+    case 'unsubscribing':
+      return 'Unsubscribing…';
+  }
 }
 
 function describeCapabilities(properties: CharacteristicProperty[]): string {
