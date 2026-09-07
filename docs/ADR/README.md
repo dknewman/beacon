@@ -9,5 +9,6 @@
 | [0005](0005-navigation-and-connection-promise-semantics.md) | React Navigation; connect() resolves at ready; JS timeout | Accepted |
 | [0006](0006-gatt-operation-queue-and-packet-log.md)         | Native GATT operation queue; bounded packet log           | Accepted |
 | [0007](0007-buffered-notification-pipeline.md)              | Buffered notification pipeline; subscriptions from acks   | Accepted |
+| [0008](0008-parser-registry.md)                             | Parser package; ordered registry with raw fallback        | Accepted |
 
-Planned: session persistence (M8), parser registry (M7).
+Planned: session persistence (M8).

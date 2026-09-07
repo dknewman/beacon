@@ -11,9 +11,9 @@ it reaches application state.
 
 > Status: **M0 (Foundation)**, **M1 (Bluetooth state and permissions)**, **M2 (Device
 > scanning)**, **M3 (Connection lifecycle)**, **M4 (GATT discovery)**, **M5 (Characteristic
-> read and write)** and **M6 (Notifications and indications)** are implemented. See
-> [Milestone status](#milestone-status) for exactly what has and has not been validated, on
-> which hardware.
+> read and write)**, **M6 (Notifications and indications)** and **M7 (Protocol parsers)** are
+> implemented. See [Milestone status](#milestone-status) for exactly what has and has not
+> been validated, on which hardware.
 
 ## What It Is
 
@@ -212,7 +212,7 @@ and UTF-8 columns (`ValueColumns`; the codec in `@beacon/ble-contracts` is hand 
 because Hermes has no `TextDecoder`). Every successful read lands as an incoming packet and
 every successful write as an outgoing one in `PacketLogProvider`, a per-device ring buffer of
 500 packets above navigation that the screen lists (latest 20) and that the packet inspector,
-the M7 parsers and the M8 recorder will share. Failures are reported, not logged.
+the protocol parsers and the M8 recorder share. Failures are reported, not logged.
 
 ## Notifications and Indications
 
@@ -234,11 +234,37 @@ one and an indication only when that is all it offers; a characteristic with nei
 refused with "Notifications not supported". A failed subscription is reported in the row, not
 logged as a packet. See [ADR 0007](docs/ADR/0007-buffered-notification-pipeline.md).
 
-## Protocol Parsers, Session Recording
+## Protocol Parsers
 
-Not yet implemented. They are scheduled as milestones M7 and M8 in PROJECT.md. The shared domain
-models (`BlePacket`, `BleSession`) already exist in `@beacon/ble-contracts` so the native,
-validation and UI layers grow against one vocabulary.
+`packages/protocol-parsers` and `apps/mobile/src/features/parsers/`: the characteristic
+screen shows a parsed reading of the latest value above the HEX, DECIMAL, BINARY, ASCII and
+UTF-8 columns (label, one-line summary, then every field with its unit) and a one-line
+summary on each packet row, so a heart rate strap reads "Heart rate, 80 bpm" with sensor
+contact, energy expended and RR intervals underneath, and a Device Name reads as text. The
+parsers live in their own workspace package with no UI imports (PROJECT.md 19): a
+bounds-checked little-endian `ByteReader` with the SIG scalar types (IEEE 11073 SFLOAT with
+its special values, the seven-byte Date Time), one `BleParser` per characteristic matched on
+its canonical UUID (Battery Level `2A19`, Heart Rate Measurement `2A37`, Weight Measurement
+`2A9D`, Blood Pressure Measurement `2A35`, UTF-8 text for the SIG string characteristics and
+the Nordic UART lines) and a raw-bytes parser that matches everything and never fails.
+`createParserRegistry` consults them in order, first match wins, with the raw fallback last;
+`parse` takes the bridge's `number[]`, hands the parser a `Uint8Array` and returns an
+outcome, never throws: a malformed value yields `{ ok: false, parserId, reason, fallback }`
+with the raw reading standing in, and the screen names the parser and the reason ("Missing
+heart rate: needed 2 byte(s) at offset 1, 1 left") so a non-conformant peripheral is shown
+rather than hidden. Every parser result is validated by a zod schema before it is handed on,
+as PROJECT.md asks for parser output. The parsers follow the Bluetooth SIG characteristic
+definitions and are tested with spec-shaped vectors; the mock scale and blood pressure
+monitor emit spec-shaped measurements, and a test asserts every scripted notifier parses with
+a non-raw parser. Parsing is stateless and derived from the packet log at render time, so M7
+adds no state machine and no native code. See
+[ADR 0008](docs/ADR/0008-parser-registry.md).
+
+## Session Recording
+
+Not yet implemented. It is scheduled as milestone M8 in PROJECT.md. The shared domain models
+(`BlePacket`, `BleSession`, `ParsedValue`) already exist in `@beacon/ble-contracts` so the
+native, validation and UI layers grow against one vocabulary.
 
 ## Testing
 
@@ -267,7 +293,9 @@ device and an unnamed beacon) that advertise on realistic intervals with driftin
 through every transition, answer RSSI reads, serve a scripted GATT table and characteristic
 values, store writes so the next read returns them, push notifications and indications on
 scripted intervals once subscribed (a drifting heart rate about once a second, a battery level
-every few seconds, a weight measurement indication, Nordic UART TX) and stop them with the
+every few seconds, a weight measurement indication, a blood pressure measurement indication,
+Nordic UART TX, every one shaped as its characteristic definition says so the parsers read
+it) and stop them with the
 link, enforce characteristic properties the way native does, and can be scripted to refuse,
 stall or drop a connection or to fail the next read, write or subscription change. It refuses
 to scan or connect when the simulated radio is off or permission is missing. Set
@@ -339,12 +367,14 @@ beacon/
 │       ├── features/gatt/       GATT table provider, inspector and characteristic screens, read/write operations
 │       ├── features/packets/    per-device packet log (ring buffer) and packet row presentation
 │       ├── features/subscriptions/ per-characteristic subscriptions and the buffered value pipeline
+│       ├── features/parsers/    parsed value of a packet (registry glue) and its view
 │       ├── mock/                scripted mock BLE client (runtime option)
 │       ├── native/              Turbo Module spec + validated client wrapper
 │       └── theme/
 ├── packages/
-│   ├── ble-contracts/           domain models, state unions, errors, bridge contract, UUIDs, known UUID registry, byte codecs
-│   └── validation/              zod schemas + parse helpers for the native boundary
+│   ├── ble-contracts/           domain models, state unions, errors, bridge contract, UUIDs, known UUID registry, byte codecs, parser types
+│   ├── validation/              zod schemas + parse helpers for the native boundary and parser output
+│   └── protocol-parsers/        byte reader, SIG characteristic parsers, UTF-8 and raw parsers, parser registry
 ├── docs/                        architecture, state model, bridge, permissions, testing, ADRs
 ├── scripts/ios/                 Xcode project sync (xcodeproj gem)
 └── .github/workflows/ci.yml
@@ -359,6 +389,7 @@ beacon/
 - [ADR 0005](docs/ADR/0005-navigation-and-connection-promise-semantics.md): React Navigation native stack above the coordinators; `connect()` resolves at `ready`; JavaScript owns the connection timeout.
 - [ADR 0006](docs/ADR/0006-gatt-operation-queue-and-packet-log.md): pure per-connection GATT operation queue in native; one operation at a time from the UI; bounded packet log above navigation; bytes as `number[]` across the bridge.
 - [ADR 0007](docs/ADR/0007-buffered-notification-pipeline.md): notifications timestamped natively, buffered in JavaScript and flushed at most every 100 ms into one packet-log batch; subscriptions mirrored from native acknowledgements and dropped with the link; Android writes the CCCD itself; notification when offered, indication only otherwise.
+- [ADR 0008](docs/ADR/0008-parser-registry.md): parsers in their own workspace package with no UI imports; `number[]` in, `Uint8Array` to the parsers; first-match ordered registry with a raw fallback that always succeeds; failures are outcomes, not exceptions; output validated by schema; parsers follow the SIG characteristic definitions rather than the illustrative PROJECT.md example.
 
 ## Milestone status
 
@@ -371,7 +402,8 @@ beacon/
 | M4 GATT discovery                  | Implemented, CI-validated, **no hardware validation** | `GattDiscoveryApi` on the bridge; native discovers the whole table while connecting and serves it from cache; UUID normalization and property validation at the boundary; known UUID registry; GATT inspector and characteristic detail screens; `GattMapper` / `GattTreeMapper` covered by XCTest and JUnit. Discovery, failure and the table being dropped with the link are exercised by Jest; no person has yet inspected a real peripheral's table on a device.                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | M5 Characteristic read and write   | Implemented, CI-validated, **no hardware validation** | `GattValueApi` on the bridge (`readCharacteristic`, `writeCharacteristic` with and without response, bytes as `number[]`); per-characteristic operation state with one operation in flight; write form with HEX / decimal / UTF-8 input and live validation; HEX, DECIMAL, BINARY, ASCII and UTF-8 value columns; per-device packet log above navigation; mock reads and writes with property enforcement; pure `GattOperationQueue` in Swift and Kotlin with unit tests. Reads, writes, both failure paths and a link dropping mid-operation are exercised by Jest against the fake client; no person has yet read or written a characteristic on a device.                                                                                                                                                                                                                                |
 | M6 Notifications and indications   | Implemented, CI-validated, **no hardware validation** | `GattNotifyApi` on the bridge (`setNotify` resolving on the peripheral's acknowledgement, `onCharacteristicValueChanged` with native timestamps); per-characteristic subscription state mirrored from the acknowledgement and dropped with the link; buffered value pipeline flushing at most every 100 ms into one packet-log batch and one count update per characteristic; Subscribe / Unsubscribe control and a Notifications row on the characteristic screen; mock notifiers with property enforcement; `setNotifyValue` on iOS and the CCCD write on Android behind the GATT queue, `NotificationDescriptorMapper` covered by JUnit. Subscribing, unsubscribing, a burst landing as one flush, a refused subscription and the link dropping while subscribed are exercised by Jest against the fake client; no person has yet received a notification from a peripheral on a device. |
-| M7 and later                       | Not started                                           |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| M7 Protocol parsers                | Implemented, CI-validated, **no hardware validation** | `@beacon/protocol-parsers` workspace package: bounds-checked `ByteReader` (SFLOAT, Date Time), Battery Level, Heart Rate Measurement, Weight Measurement, Blood Pressure Measurement, UTF-8 text and raw-bytes parsers, first-match registry with the raw fallback and failures returned as outcomes; parser output validated by schema; parsed reading on the characteristic screen and a summary per packet row; mock blood pressure indication and a test that every scripted notifier parses. Pure TypeScript with no native change, so CI's `js` job is the whole check; the parsers are exercised by Jest with spec-shaped vectors, through the fake client and against the mock peripherals. No person has yet seen a real peripheral's value parsed on a device, and whether real hardware sends what the SIG definitions say is still a hardware question.                         |
+| M8 and later                       | Not started                                           |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 ## Roadmap
 

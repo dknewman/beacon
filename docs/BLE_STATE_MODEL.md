@@ -170,6 +170,16 @@ value on screen while the controls go with the table. Implemented in
 batches (`packets_recorded`, one dispatch per flush) and the M7 parsers read from the same
 log.
 
+### Parsed values — M7
+
+Parsing adds no machine. A parsed value is a pure function of a packet
+(`parsePacket(packet)` in `features/parsers`, over `@beacon/protocol-parsers`): the packet's
+UUIDs are the parser context, the bytes are the input, and the result is a `ParseOutcome`
+computed at render time for the latest packet and for each listed row. Nothing is stored,
+so there is no parsed state to reconcile with the log, the flush or the link; a packet that
+fails to parse stays a packet, with the reason derived from it on every render (ADR 0008).
+Every machine above is unchanged.
+
 ### GATT queue and the connection machine
 
 Native serializes reads, writes and subscription changes per peripheral in
