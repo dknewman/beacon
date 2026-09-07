@@ -10,6 +10,7 @@ import React, {
 } from 'react';
 import { toBleError } from '@beacon/ble-contracts';
 import { useBleClient } from '../../native/BleClientContext';
+import { useActivityBus } from '../activity/ActivityBusProvider';
 import { useConnections } from '../connection/ConnectionProvider';
 import {
   gattReducer,
@@ -34,6 +35,7 @@ const GattContext = createContext<GattCoordinator | undefined>(undefined);
  */
 export function GattProvider({ children }: PropsWithChildren): React.JSX.Element {
   const client = useBleClient();
+  const bus = useActivityBus();
   const { connections } = useConnections();
   const [state, dispatch] = useReducer(gattReducer, initialGattState);
   const stateRef = useRef(state);
@@ -54,7 +56,19 @@ export function GattProvider({ children }: PropsWithChildren): React.JSX.Element
       }
       dispatch({ type: 'discovery_requested', deviceId });
       client.discoverServices(deviceId).then(
-        services => dispatch({ type: 'discovery_succeeded', deviceId, services }),
+        services => {
+          dispatch({ type: 'discovery_succeeded', deviceId, services });
+          bus.publish({
+            deviceId,
+            kind: 'services_discovered',
+            serviceCount: services.length,
+            characteristicCount: services.reduce(
+              (count, service) => count + service.characteristics.length,
+              0,
+            ),
+            timestamp: new Date().toISOString(),
+          });
+        },
         (error: unknown) =>
           dispatch({
             type: 'discovery_failed',
@@ -63,7 +77,7 @@ export function GattProvider({ children }: PropsWithChildren): React.JSX.Element
           }),
       );
     },
-    [client],
+    [bus, client],
   );
 
   const value = useMemo<GattCoordinator>(
