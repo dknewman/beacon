@@ -1,0 +1,13 @@
+{
+  "name": "@beacon/protocol-parsers",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Protocol parsers and the registry that turns characteristic bytes into parsed values",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "sideEffects": false,
+  "dependencies": {
+    "@beacon/ble-contracts": "0.1.0",
+    "@beacon/validation": "0.1.0"
+  }
+}
