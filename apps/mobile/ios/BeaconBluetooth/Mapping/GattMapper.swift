@@ -74,4 +74,37 @@ public enum GattMapper {
   public static func services(_ services: [CBService]) -> [DiscoveredService] {
     services.map(service)
   }
+
+  /// The canonical 128-bit, uppercase, hyphenated form of a UUID string, matching
+  /// `normalizeUuid` in `@beacon/ble-contracts`; nil when the string is not a UUID.
+  ///
+  /// CoreBluetooth abbreviates SIG-assigned UUIDs (`"180F"`) while JavaScript sends the full
+  /// form, so characteristic lookups compare this form on both sides. Accepts 16-bit, 32-bit,
+  /// unhyphenated and hyphenated 128-bit input in either case, with an optional `0x` prefix.
+  public static func canonicalUuid(_ value: String) -> String? {
+    var cleaned = value.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    if cleaned.hasPrefix("0X") {
+      cleaned.removeFirst(2)
+    }
+    let hex = CharacterSet(charactersIn: "0123456789ABCDEF")
+    let isHex = !cleaned.isEmpty && cleaned.unicodeScalars.allSatisfy(hex.contains)
+    switch cleaned.count {
+    case 4:
+      return isHex ? "0000\(cleaned)\(baseUuidSuffix)" : nil
+    case 8:
+      return isHex ? cleaned + baseUuidSuffix : nil
+    case 32:
+      guard isHex else { return nil }
+      let chars = Array(cleaned)
+      let parts = [chars[0..<8], chars[8..<12], chars[12..<16], chars[16..<20], chars[20..<32]]
+      return parts.map { String($0) }.joined(separator: "-")
+    case 36:
+      return UUID(uuidString: cleaned) == nil ? nil : cleaned
+    default:
+      return nil
+    }
+  }
+
+  /// Tail of every UUID derived from the Bluetooth Base UUID.
+  private static let baseUuidSuffix = "-0000-1000-8000-00805F9B34FB"
 }
