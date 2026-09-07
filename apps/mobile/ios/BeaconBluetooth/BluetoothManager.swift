@@ -23,6 +23,10 @@ public final class BluetoothManager: NSObject {
   /// Called for every connection transition with the device id and `BleConnectionState.rawValue`.
   @objc public var onConnectionStateChanged: ((String, String) -> Void)?
 
+  /// Called for every notification or indication with a `CharacteristicValueUpdate.payload`.
+  /// Only subscribed characteristics produce these; a read answers through its own completion.
+  @objc public var onCharacteristicValueChanged: (([String: Any]) -> Void)?
+
   /// Called for asynchronous failures with an optional device id and a `BleError.payload`.
   /// Device errors are always sent before the `disconnected` transition they cause.
   @objc public var onError: ((String?, [String: Any]) -> Void)?
@@ -351,6 +355,45 @@ public final class BluetoothManager: NSObject {
     }
   }
 
+  // MARK: - Notifications and indications
+
+  /// Enables or disables notifications (or indications, whichever the characteristic offers;
+  /// CoreBluetooth picks). Completes with `nil` once the peripheral has acknowledged the change,
+  /// or with a `BleError.payload` (`disconnected`, `characteristic_not_found`,
+  /// `subscription_failed`). The change is a descriptor write, so it runs behind the
+  /// peripheral's other GATT operations; CoreBluetooth answers through
+  /// `didUpdateNotificationStateFor`, after which values arrive on `onCharacteristicValueChanged`.
+  /// The request is forwarded even when `isNotifying` already matches `enabled`, so the
+  /// completion reports the peripheral's answer rather than cached state.
+  @objc public func setNotify(
+    _ deviceId: String,
+    serviceUuid: String,
+    characteristicUuid: String,
+    enabled: Bool,
+    completion: @escaping ([String: Any]?) -> Void
+  ) {
+    queue.async { [self] in
+      let target: GattTarget
+      switch resolveCharacteristic(deviceId: deviceId, serviceUuid: serviceUuid, characteristicUuid: characteristicUuid) {
+      case .success(let resolved):
+        target = resolved
+      case .failure(let error):
+        completion(error.payload)
+        return
+      }
+      let characteristic = target.characteristic
+      guard characteristic.properties.contains(.notify) || characteristic.properties.contains(.indicate) else {
+        completion(propertyError(code: .subscriptionFailed, message: "Notifications not supported").payload)
+        return
+      }
+      target.session.enqueue(label: "notify \(characteristicUuid)", cancel: { completion($0.payload) }) { session in
+        session.pendingNotify = (characteristic, completion)
+        session.peripheral.setNotifyValue(enabled, for: characteristic)
+        return true
+      }
+    }
+  }
+
   // MARK: - Lifecycle
 
   /// Releases CoreBluetooth resources. Called when the React instance is torn down.
@@ -379,6 +422,7 @@ public final class BluetoothManager: NSObject {
       onStateChanged = nil
       onDeviceDiscovered = nil
       onConnectionStateChanged = nil
+      onCharacteristicValueChanged = nil
       onError = nil
     }
   }
@@ -518,6 +562,8 @@ public final class BluetoothManager: NSObject {
     let ended = BleError(code: .disconnected, message: "The connection ended")
     session.settleRssiReads(with: nil, error: ended.payload)
     session.cancelOperations(with: ended)
+    // CoreBluetooth drops every subscription with the link; only the bookkeeping is left.
+    session.subscribedCharacteristics.removeAll()
     session.disconnectRequested = false
     session.services = []
     session.pendingCharacteristicDiscoveries = 0
@@ -533,10 +579,10 @@ public final class BluetoothManager: NSObject {
 
   // MARK: - Private: GATT targets
 
-  /// What a read or write addresses once its arguments have been checked.
+  /// What a read, write or subscription change addresses once its arguments have been checked.
   private typealias GattTarget = (session: PeripheralSession, characteristic: CBCharacteristic)
 
-  /// The session and characteristic a read or write addresses, or why it cannot proceed:
+  /// The session and characteristic a GATT operation addresses, or why it cannot proceed:
   /// `disconnected` unless the session is `ready`, `characteristic_not_found` otherwise.
   private func resolveCharacteristic(
     deviceId: String,
@@ -719,23 +765,45 @@ extension BluetoothManager: PeripheralSessionOwner {
     }
   }
 
+  /// Answers the in-flight read when the value is for its characteristic; anything else is a
+  /// notification or indication. CoreBluetooth reports both through this one callback, so a
+  /// notification on a characteristic that is also being read is taken as the read's answer
+  /// and the next one flows to JavaScript as usual.
   func session(
     _ session: PeripheralSession,
     didUpdateValueFor characteristic: CBCharacteristic,
     error: Error?
   ) {
-    guard let pending = session.pendingRead, sameCharacteristic(pending.characteristic, characteristic) else {
-      // A value nobody asked for is a notification; subscriptions arrive with M6 and there
-      // is no listener for them yet.
+    if let pending = session.pendingRead, sameCharacteristic(pending.characteristic, characteristic) {
+      session.pendingRead = nil
+      if let error {
+        pending.completion(nil, BleError.from(error, fallback: .readFailed).payload)
+      } else {
+        pending.completion(ByteArrayMapper.numbers(from: characteristic.value ?? Data()), nil)
+      }
+      session.operations.finish()
       return
     }
-    session.pendingRead = nil
+    // CoreBluetooth only pushes values for subscribed characteristics, so the session's
+    // bookkeeping is not consulted: a value that lands before `setNotifyValue` is acknowledged
+    // is still real data and must not be dropped.
     if let error {
-      pending.completion(nil, BleError.from(error, fallback: .readFailed).payload)
-    } else {
-      pending.completion(ByteArrayMapper.numbers(from: characteristic.value ?? Data()), nil)
+      emitError(BleError.from(error, fallback: .subscriptionFailed), for: session)
+      return
     }
-    session.operations.finish()
+    guard let service = characteristic.service else {
+      // The service is a weak back-reference; without it the value cannot be attributed to a
+      // subscription JavaScript knows about.
+      return
+    }
+    let update = CharacteristicValueMapper.map(
+      deviceId: session.peripheral.identifier,
+      serviceUuid: service.uuid,
+      characteristicUuid: characteristic.uuid,
+      value: characteristic.value,
+      receivedAt: Date()
+    )
+    onCharacteristicValueChanged?(update.payload)
   }
 
   func session(
@@ -748,6 +816,24 @@ extension BluetoothManager: PeripheralSessionOwner {
     }
     session.pendingWrite = nil
     pending.completion(error.map { BleError.from($0, fallback: .writeFailed).payload })
+    session.operations.finish()
+  }
+
+  /// `isNotifying` is the peripheral's answer, so the session's bookkeeping follows it on every
+  /// successful callback, whether or not a `setNotify` call is waiting for it.
+  func session(
+    _ session: PeripheralSession,
+    didUpdateNotificationStateFor characteristic: CBCharacteristic,
+    error: Error?
+  ) {
+    if error == nil {
+      session.setSubscribed(characteristic.isNotifying, for: characteristic)
+    }
+    guard let pending = session.pendingNotify, sameCharacteristic(pending.characteristic, characteristic) else {
+      return
+    }
+    session.pendingNotify = nil
+    pending.completion(error.map { BleError.from($0, fallback: .subscriptionFailed).payload })
     session.operations.finish()
   }
 

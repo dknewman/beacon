@@ -67,7 +67,8 @@ public enum AdvertisementMapper {
     data.map { String(format: "%02X", $0) }.joined()
   }
 
-  /// ISO-8601 with millisecond precision and a `Z` suffix, the `lastSeenAt` wire format.
+  /// ISO-8601 with millisecond precision and a `Z` suffix, the `lastSeenAt` and `timestamp`
+  /// wire format.
   public static func isoTimestamp(_ date: Date) -> String {
     isoFormatter.string(from: date)
   }

@@ -5,6 +5,7 @@ import { ConnectionProvider } from '../features/connection/ConnectionProvider';
 import { GattProvider } from '../features/gatt/GattProvider';
 import { PacketLogProvider } from '../features/packets/PacketLogProvider';
 import { ScanProvider } from '../features/scan/ScanProvider';
+import { SubscriptionProvider } from '../features/subscriptions/SubscriptionProvider';
 import type { BleClient } from '../native/BleClient';
 import { BleClientProvider } from '../native/BleClientContext';
 import { useTheme } from '../theme/useTheme';
@@ -26,7 +27,9 @@ export function App({ bleClient }: AppProps): React.JSX.Element {
           <ConnectionProvider>
             <GattProvider>
               <PacketLogProvider>
-                <ThemedNavigation />
+                <SubscriptionProvider>
+                  <ThemedNavigation />
+                </SubscriptionProvider>
               </PacketLogProvider>
             </GattProvider>
           </ConnectionProvider>

@@ -1,11 +1,13 @@
 package com.beacon.bluetooth.mapping
 
 import android.bluetooth.BluetoothGatt
+import android.bluetooth.BluetoothStatusCodes
 import com.beacon.bluetooth.errors.BleError
 import com.beacon.bluetooth.errors.BleErrorCode
 
 /**
- * Maps `BluetoothGattCallback` status codes onto the contract. The Android stack reports many
+ * Maps `BluetoothGattCallback` status codes, and the `BluetoothStatusCodes` Android 13 returns
+ * when a request is handed to the stack, onto the contract. The Android stack reports many
  * failures through the same callback, so the operation that failed picks the fallback code and
  * the platform status is kept in `nativeCode` for developer mode.
  */
@@ -44,6 +46,31 @@ object GattStatusMapper {
     /** Describes a failed service discovery or other GATT operation. */
     fun operationFailure(code: BleErrorCode, operation: String, status: Int): BleError =
         error(code, "$operation failed (status $status)", status)
+
+    /**
+     * Interprets the status Android 13 and later return when a request such as
+     * `writeCharacteristic` or `writeDescriptor` is handed to the stack: null once the stack
+     * accepted it (its callback will follow), otherwise the error to settle with. A missing
+     * permission keeps its own code; anything else is a [code] failure naming the [operation].
+     */
+    fun requestRejection(code: BleErrorCode, operation: String, status: Int): BleError? =
+        when (status) {
+            BluetoothStatusCodes.SUCCESS -> null
+            BluetoothStatusCodes.ERROR_MISSING_BLUETOOTH_CONNECT_PERMISSION ->
+                BleError(
+                    code = BleErrorCode.PERMISSION_DENIED,
+                    message = "Missing Bluetooth permission",
+                    nativeCode = status.toString(),
+                    nativeDomain = "android.bluetooth.BluetoothStatusCodes",
+                )
+            else ->
+                BleError(
+                    code = code,
+                    message = "The Bluetooth stack rejected the $operation (status $status)",
+                    nativeCode = status.toString(),
+                    nativeDomain = "android.bluetooth.BluetoothStatusCodes",
+                )
+        }
 
     private fun error(code: BleErrorCode, message: String, status: Int): BleError =
         BleError(

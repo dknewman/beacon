@@ -88,7 +88,10 @@ leaves that state (radio off, permission revoked). Discovery events are accepted
 `ble.error` events without a `deviceId` are adapter or bridge failures and move the adapter
 machine to `failed`, with one exception: code `scan_failed` belongs to the scan machine
 (`native_failed`). Device-scoped errors (`deviceId` present) belong to the connection coordinator: they move that
-device to `failed`, and native always sends them before the `disconnected` they cause.
+device to `failed`, and native always sends them before the `disconnected` they cause. Operation-level
+codes (`read_failed`, `write_failed`, `subscription_failed`) are the exception: they describe one GATT
+operation, not the link, so the connection machine leaves the state alone and the operation's own
+promise or the subscription state carries the failure.
 
 ## Connection state (`DeviceConnection`) — M3
 
@@ -151,8 +154,9 @@ with a reason. Implemented in `features/gatt/characteristicOperations.ts`.
 ## Packet log (`PacketLogState`) — M5
 
 ```text
-packet_recorded { packet } ──► prepend to packets[deviceId], drop beyond 500
-log_cleared { deviceId }   ──► remove packets[deviceId]
+packet_recorded  { packet }   ──► prepend to packets[deviceId], drop beyond 500
+packets_recorded { packets }  ──► prepend the batch per device, newest first, drop beyond 500 (M6)
+log_cleared      { deviceId } ──► remove packets[deviceId]
 ```
 
 A per-device ring buffer of `BlePacket` (id, timestamp, device, service and characteristic
@@ -162,18 +166,87 @@ as `incoming` and a successful write as `outgoing`; failures are not packets and
 `lastOutcome`. `PacketLogProvider` holds the log above navigation so the history survives
 screen changes and outlives the link: losing the connection keeps the packets and the last
 value on screen while the controls go with the table. Implemented in
-`features/packets/packetLogReducer.ts`; the M6 value-changed events and the M7 parsers read
-from the same log.
+`features/packets/packetLogReducer.ts`; the M6 value pipeline records notifications in
+batches (`packets_recorded`, one dispatch per flush) and the M7 parsers read from the same
+log.
 
 ### GATT queue and the connection machine
 
-Native serializes reads and writes per peripheral in `GattOperationQueue` (ADR 0006): an
-operation starts when the queue is idle, otherwise waits for the predecessor's callback. A
+Native serializes reads, writes and subscription changes per peripheral in
+`GattOperationQueue` (ADR 0006): an operation starts when the queue is idle, otherwise waits
+for the predecessor's callback. `setNotify` is one of them: `setNotifyValue` on iOS and the
+descriptor write on Android are GATT requests like a read, answered by their own callbacks. A
 call made while the device is not `ready` rejects with `disconnected` without being queued.
 When the link ends for any reason, the owner cancels the queue and settles every in-flight and
 pending completion with `disconnected`; as with every device-scoped error, the `ble.error`
 event arrives before the `disconnected` transition, so the connection machine records
 `lastError` and the operation state records the same code in `lastOutcome`.
+
+## Subscriptions (`SubscriptionsState`) — M6
+
+```text
+off|absent ──subscribe_requested──► subscribing (notificationCount reset) ──subscribe_succeeded──► on
+subscribing ──subscribe_failed──► off (lastError)
+on ──unsubscribe_requested (lastError cleared)──► unsubscribing ──unsubscribe_succeeded──► off
+unsubscribing ──unsubscribe_failed──► on (lastError)
+any|absent ──values_received { counts: [{ key, count, at }] }──► same phase (notificationCount += count, lastValueAt = at)
+any ──link_ended { deviceId }──► every entry of the device removed
+```
+
+One `CharacteristicSubscription` per key `deviceId/serviceUuid/characteristicUuid`
+(`subscriptionKey`), holding `phase` (`SubscriptionPhase`), `notificationCount` (values since
+the subscription was last turned on), `lastValueAt` and `lastError`; `subscriptionOf` answers
+`off` with a zero count for a key with no entry. `subscribe_requested` is ignored unless the
+entry is `off` and `unsubscribe_requested` unless it is `on`, so a second tap while
+`setNotify` is in flight is a no-op, and every acknowledgement is ignored unless the entry is
+in the phase that asked for it. The phase changes on the promise, not on the tap: `setNotify`
+resolves only once the peripheral acknowledged the change (`didUpdateNotificationStateFor`
+on iOS, the Client Characteristic Configuration descriptor write on Android), so `on` means
+the peripheral agreed to push values. A failed subscribe returns to `off` with the contract
+code in `lastError`; a failed unsubscribe stays `on` with `lastError`, because native still
+delivers values. `values_received` counts under any phase, and creates an entry for a
+characteristic the app never subscribed to, so the screen shows what is actually arriving.
+`link_ended` removes every entry of the device. Implemented in
+`features/subscriptions/subscriptionReducer.ts` (`subscriptionsReducer`), with the status row
+text in `describeSubscription` ("Off" / "Failed" with the reason / "Subscribing…" / "On" with
+"N notifications received." / "Unsubscribing…"); driven by `SubscriptionProvider`, the only
+caller of `GattNotifyApi` (ADR 0007).
+
+Gate: the screen offers Subscribe only for a characteristic with `notify` or `indicate` and a
+`ready` link, with "Subscribing…" / "Unsubscribing…" as the button label while the call is in
+flight; native refuses anything else with `subscription_failed` ("Notifications not
+supported") before queueing.
+
+### Value pipeline
+
+```text
+characteristic.value_changed ──► createPacket (incoming, native timestamp) ──► ref buffer (no React state)
+                                                                                 │ flushed at most every 100 ms
+                                                                                 ├──► packets_recorded { packets }                  one batch into the packet log
+                                                                                 └──► values_received { counts: [{ key, count, at }] }  one action, one entry per characteristic
+```
+
+`SubscriptionProvider` is the only listener for `characteristic.value_changed`. Events are
+appended to a ref buffer and flushed at most every 100 ms (`flushIntervalMs`, default
+`DEFAULT_FLUSH_INTERVAL_MS`): one `packets_recorded` batch into the packet log (`recordMany`,
+capacity still 500 per device) and one `values_received` action with a count per
+characteristic, so a 100 Hz stream causes at most ten renders per second (PROJECT.md 17, 37)
+and the value columns and packet list on the characteristic screen update from the same
+batched log as reads and writes. Every value is an `incoming` packet; its timestamp is the one
+native took at receipt (ADR 0007), so buffering delays the display, not the record. Failures
+are not packets: a rejected `setNotify` lives in the entry's `lastError`.
+
+### Subscriptions and the connection machine
+
+Native drops every subscription with the link and does not report them ending one by one
+(CoreBluetooth forgets `isNotifying` with the connection; Android's descriptor state lives on
+the closed client). The provider therefore watches the connection machine and dispatches
+`link_ended` for every device with entries whose connection is not `ready`: a remote drop,
+adapter loss or a disconnect the user asked for. A `setNotify` in flight when the link ends is
+settled with `disconnected` by the queue cancellation, after the device-scoped `ble.error` and
+before the `disconnected` transition, so the connection machine records `lastError` first;
+the late rejection finds its entry already removed and is ignored. Reconnecting starts from
+`off`, as native does.
 
 ## Events
 
@@ -189,4 +262,6 @@ ble.error { deviceId?, error }
 
 Every event is validated by `nativeBleEventSchema` before application code sees it. A malformed
 payload is converted into a `ble.error` with code `invalid_payload` so bridge bugs are visible
-rather than silently dropped.
+rather than silently dropped. `characteristic.value_changed` is timestamped natively at
+receipt (ADR 0007) and is the only event the application layer buffers rather than applying
+at once.

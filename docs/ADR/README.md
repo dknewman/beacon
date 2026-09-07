@@ -8,5 +8,6 @@
 | [0004](0004-scan-duplicates-and-device-cache.md)            | Duplicate advertisements, native throttling, JS cache     | Accepted |
 | [0005](0005-navigation-and-connection-promise-semantics.md) | React Navigation; connect() resolves at ready; JS timeout | Accepted |
 | [0006](0006-gatt-operation-queue-and-packet-log.md)         | Native GATT operation queue; bounded packet log           | Accepted |
+| [0007](0007-buffered-notification-pipeline.md)              | Buffered notification pipeline; subscriptions from acks   | Accepted |
 
 Planned: session persistence (M8), parser registry (M7).

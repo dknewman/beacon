@@ -46,7 +46,7 @@ object ScanResultMapper {
             rssi = rssi,
             connectable = connectable,
             manufacturerData = manufacturerHex(manufacturerData),
-            serviceUuids = serviceUuids.map { it.toString().uppercase() }.distinct(),
+            serviceUuids = serviceUuids.map(BleUuid::format).distinct(),
             lastSeenAt = IsoTimestamp.format(seenAtMillis),
         )
 
