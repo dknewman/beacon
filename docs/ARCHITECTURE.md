@@ -11,18 +11,22 @@ Native consumes a narrow typed bridge; state is explicit.
 | UI             | `apps/mobile/src/features/**/*Screen.tsx`, `src/components`, `src/app/navigation` | Rendering, accessibility, user intent, routes by id                                    | Call the bridge directly, hold BLE state |
 | Application    | `apps/mobile/src/features/**` (reducers, hooks, coordinators, providers)          | Explicit state machines, orchestration, buffering                                      | Import platform APIs                     |
 | Contracts      | `packages/ble-contracts`                                                          | Domain models, state unions, error codes, `NativeBleClient` segments, `NativeBleEvent` | Depend on React Native                   |
-| Validation     | `packages/validation`                                                             | zod schemas for every boundary payload, `ValidationResult`                             | Know about UI                            |
+| Validation     | `packages/validation`                                                             | zod schemas for every boundary payload and for parser output, `ValidationResult`       | Know about UI                            |
+| Parsers        | `packages/protocol-parsers`                                                       | `ByteReader`, the SIG and text parsers, the registry, `ParseOutcome`                   | Import UI or application code            |
 | Bridge wrapper | `apps/mobile/src/native`                                                          | Codegen spec, `createNativeBleClient`, dependency injection context, mock client       | Contain BLE policy                       |
 | Native         | `apps/mobile/ios/BeaconBluetooth`, `apps/mobile/android/.../bluetooth`            | CoreBluetooth / BluetoothGatt, GATT queue, event emission, error mapping               | Trust JS for connection state            |
 
 Dependency direction is strictly downward in the table. `packages/*` never import from
-`apps/mobile`.
+`apps/mobile`. Among the packages the direction is `ble-contracts` ← `validation` ←
+`protocol-parsers` ← `apps/mobile`: the contracts know nothing of validation, validation
+knows nothing of the parsers, and the parsers know nothing of the app.
 
-## Data flow (M0–M6)
+## Data flow (M0–M7)
 
 ```text
 NavigationContainer ─ DeviceListScreen ──► DeviceDetailScreen ──► GattInspectorScreen ──► CharacteristicDetailScreen
    ▲ reads                                 ▲ reads by id, polls RSSI      ▲ reads the cached table by id   ▲ reads, writes, subscribes, lists packets
+   │                                                                                                        │ parsePacket / packetSummary (@beacon/protocol-parsers) over the packet log, at render time
 ScanProvider: readiness + scan + device cache   ConnectionProvider: per-device machine   GattProvider: per-device table   PacketLogProvider: per-device ring buffer   SubscriptionProvider: per-characteristic subscription, 100 ms flush
    ▲                                              ▲                    ▲                     ▲                    ▲ useCharacteristicOperations        ▲ recordMany (batched) ─────────┘
    │ BluetoothAdapterApi / PermissionApi          │ ScanApi            │ ConnectionApi       │ GattDiscoveryApi   │ GattValueApi (read / write)         │ GattNotifyApi (setNotify)
@@ -71,8 +75,8 @@ BINARY, ASCII, UTF-8 for the latest packet).
 `BlePacket`, newest first, capacity 500, `createPacket` ids), `PacketLogProvider.tsx` (above
 navigation; `record`, `clear`, `packetsOf`, `packetsForCharacteristic`) and
 `packetPresentation.ts` (row labels with millisecond times). Byte encoding and the write-form
-parsers live in `@beacon/ble-contracts` (`bytes.ts`) so the M7 parsers and the M8 recorder
-work on the same `number[]` representation that crosses the bridge (ADR 0006).
+parsers live in `@beacon/ble-contracts` (`bytes.ts`) so the protocol parsers (M7) and the M8
+recorder work on the same `number[]` representation that crosses the bridge (ADR 0006).
 
 ## Subscriptions and the buffered value pipeline (M6)
 
@@ -103,6 +107,36 @@ reason and code when a change was refused); the value card says when the latest 
 received, and the value columns and the packet list update from the same batched log as reads
 and writes. Failures are reported in the row, not logged as packets.
 
+## Protocol parsers (M7)
+
+`packages/protocol-parsers` (`@beacon/protocol-parsers`) turns characteristic bytes into a
+`ParsedValue` (`@beacon/ble-contracts` `parsed-value.ts`: `parserId`, `label`, one-line
+`summary`, `fields` of `{ name, value, unit? }`). `reader.ts` is a bounds-checked
+little-endian `ByteReader` (`uint8`, `uint16`, IEEE 11073 SFLOAT with its special values, the
+seven-byte Date Time, `expectEnd`) whose every failure is a `ParseError` naming the field.
+`parsers/` holds one `BleParser` per characteristic, matched on the canonical characteristic
+UUID in the `ParserContext`: `batteryLevel` (`2A19`), `heartRateMeasurement` (`2A37`),
+`weightMeasurement` (`2A9D`), `bloodPressureMeasurement` (`2A35`), `utf8Text` (the SIG string
+characteristics and the Nordic UART lines) and `rawBytes`, which matches everything and never
+fails. `registry.ts` is `createParserRegistry(parsers)`: first match in registration order,
+the raw fallback appended when missing, `parse(bytes, context)` accepting the bridge's
+`number[]` or a `Uint8Array` and returning a `ParseOutcome`, `{ ok: true, value }` or
+`{ ok: false, parserId, reason, fallback }`; a thrown `ParseError` and a result
+`parsedValueSchema` rejects both become the failed outcome carrying the raw fallback.
+`standardParsers` and `defaultParserRegistry` are the PROJECT.md 19 set, most specific first
+(ADR 0008). The package imports nothing from the app or from React.
+
+`apps/mobile/src/features/parsers/` is the glue: `parsePacket(packet, registry)` builds the
+context from the packet's UUIDs, `presentableValue` hides a plain raw reading (the HEX column
+already shows it) but keeps a failed parse with its reason, `packetSummary` gives a row its
+one line, `formatField` renders a field with its unit; `ParsedValueView.tsx` shows the
+label, the summary, an error line naming the parser and reason when parsing failed, then the
+fields. `CharacteristicDetailScreen.tsx` renders it above the value columns for the latest
+packet and a summary on each packet row (also in the row's accessibility label). Parsing is
+stateless and happens at render time over the packet log: no parsed-value state, no
+reducer, nothing to keep in sync with the 100 ms flush; the screen lists at most 20 packets,
+so the cost is bounded and small next to the five encodings the value columns compute.
+
 ## Composition root
 
 `apps/mobile/src/app/bootstrap.tsx` is the only file that references the real Turbo Module. It
@@ -128,7 +162,8 @@ State is separated by responsibility (PROJECT.md 5). M0 introduced the adapter r
 permission reducer and readiness projection, M2 the scan reducer, device cache and in-memory
 filters, M3 the per-device connection reducer, M4 the per-device GATT table tied to the link,
 M5 the per-characteristic operation reducer and the per-device packet log, M6 the
-per-characteristic subscription reducer with its value buffer; sessions, UI state and
+per-characteristic subscription reducer with its value buffer; M7 adds no state, because
+parsed values are derived from the packet log at render time; sessions, UI state and
 persisted preferences each get their own module as their milestones land. There is no
 global store: each concern is a reducer behind a provider or hook, and screens compose them.
 
