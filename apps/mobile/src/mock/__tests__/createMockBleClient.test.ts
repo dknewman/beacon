@@ -1,4 +1,5 @@
 import { BleError, type NativeBleEvent } from '@beacon/ble-contracts';
+import { defaultParserRegistry } from '@beacon/protocol-parsers';
 import { parseNativeBleEvent } from '@beacon/validation';
 import { createMockBleClient, type MockScheduler } from '../createMockBleClient';
 import { defaultMockPeripherals, HEART_RATE_SERVICE } from '../mockPeripherals';
@@ -301,6 +302,34 @@ describe('createMockBleClient connections', () => {
     await advance(10);
     await expect(scripted).rejects.toMatchObject({ message: 'CCCD write failed' });
     expect(client.isNotifying(HRM, HR_MEASUREMENT)).toBe(false);
+  });
+
+  it('scripts every default notifier so the standard parsers understand it', async () => {
+    for (const peripheral of defaultMockPeripherals) {
+      for (const [characteristicUuid, notifier] of Object.entries(
+        peripheral.notifiers ?? {},
+      )) {
+        const serviceUuid = peripheral.services.find(service =>
+          service.characteristics.some(
+            candidate => candidate.uuid === characteristicUuid,
+          ),
+        )?.uuid;
+        expect(serviceUuid).toBeDefined();
+        for (let sequence = 0; sequence < 5; sequence += 1) {
+          const outcome = defaultParserRegistry.parse(
+            notifier.produce(sequence, () => 0.5),
+            {
+              serviceUuid: serviceUuid ?? '',
+              characteristicUuid,
+            },
+          );
+          expect(outcome.ok).toBe(true);
+          if (outcome.ok) {
+            expect(outcome.value.parserId).not.toBe('raw-bytes');
+          }
+        }
+      }
+    }
   });
 
   it('rejects unknown devices and RSSI reads without a link', async () => {
