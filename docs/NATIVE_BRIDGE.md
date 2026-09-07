@@ -103,7 +103,8 @@ on each platform does the conversion and the range check: iOS between `[NSNumber
 Android between the doubles React Native delivers and the JVM's signed `ByteArray`, unpacking
 reads as unsigned integers so `0xFF` arrives as `255` on both. A fractional, negative,
 oversized or non-finite value in a write is rejected with `invalid_payload` before the stack
-sees it.
+sees it. The protocol parsers (M7) take the same `number[]` and convert to `Uint8Array`
+inside the registry, so nothing about the bridge changed for them (ADR 0008).
 
 ### Notifications and indications (M6)
 
