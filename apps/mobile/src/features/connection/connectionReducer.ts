@@ -32,6 +32,13 @@ export type ConnectionAction =
   /** A connect/disconnect call rejected, or the JavaScript connect timeout fired. */
   | { type: 'request_failed'; deviceId: string; error: BleError; at: number };
 
+/** Codes that describe one GATT operation rather than the link; they never move the machine. */
+const OPERATION_ERROR_CODES: ReadonlySet<string> = new Set([
+  'read_failed',
+  'write_failed',
+  'subscription_failed',
+]);
+
 export const initialConnectionsState: ConnectionsState = {};
 
 export const disconnectedConnection: DeviceConnection = {
@@ -86,6 +93,11 @@ function reduceOne(
       return { state: action.state, since: action.at };
 
     case 'native_error_received':
+      if (OPERATION_ERROR_CODES.has(action.error.code)) {
+        // A read, write or subscription failed; the link itself is intact and the
+        // operation's own promise or the subscription state carries the reason.
+        return current;
+      }
       return current.state === 'disconnected'
         ? { ...current, lastError: action.error }
         : { state: 'failed', lastError: action.error, since: action.at };

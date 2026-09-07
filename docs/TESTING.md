@@ -29,7 +29,8 @@ tests).
 - Integration tests drive the real navigator: they tap a row, assert on the detail screen, and
   go back. `@react-navigation/*` and `react-native-screens` are ESM-only and are added to the
   Jest transform allow-list in `apps/mobile/jest.config.js`. Timers (connect timeout, RSSI
-  polling, stale hiding) run under Jest fake timers.
+  polling, stale hiding, the notification flush) run under Jest fake timers, so the 100 ms
+  batching is asserted by advancing the clock rather than by waiting.
 - Native tests cover the parts that can run without hardware: state and error mapping and the
   wire value contract. Anything touching a real radio is validated manually and reported as such.
 - Contract parity: the Swift and Kotlin tests assert that their wire values equal the TypeScript
@@ -56,20 +57,39 @@ tests).
 | `apps/mobile/android/app/src/test/.../mapping/ByteArrayMapperTest.kt`                  | Packing unsigned values into bytes, an empty payload as a valid empty write, out-of-range / fractional / undefined values rejected, unpacking as unsigned integers, round trip                                                                     |
 | `apps/mobile/ios/BeaconBluetoothTests/GattMapperTests.swift` (`canonicalUuid`)         | Agrees with `normalizeUuid` in TypeScript and with CoreBluetooth's own rendering; rejects anything that is not a UUID                                                                                                                              |
 
+## Notification coverage (M6)
+
+| Suite                                                                                          | Covers                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/mobile/src/features/subscriptions/__tests__/subscriptionReducer.test.ts`                 | `off → subscribing → on → unsubscribing → off`, acknowledgements ignored unless they match the phase, a failed subscribe returning to `off` with the reason and a failed unsubscribe staying `on`, batched counts accumulated per characteristic with the newest time kept, `link_ended` dropping every subscription of that device and no other, the status text for every phase                                                           |
+| `apps/mobile/src/features/packets/__tests__/packetLogReducer.test.ts` (`packets_recorded`)     | A batch recorded as one update, newest first, still capped                                                                                                                                                                                                                                                                                                                                                                                  |
+| `apps/mobile/src/native/__tests__/createNativeBleClient.test.ts` ("connections", "events")     | `setNotify` flattened onto the four scalar arguments with `subscription_failed` as the default code; `characteristic.value_changed` normalized (UUIDs, byte range, timestamp) and a malformed one surfaced as `invalid_payload`; every native subscription removed on unsubscribe                                                                                                                                                           |
+| `apps/mobile/tests/App.test.tsx` ("notifications")                                             | Subscribe, "Subscribing…" while the call is pending and `On` only after it resolves, a burst of three values landing as one flush (count, packet list, value columns, "Received at"), unsubscribe with the history kept; 25 values in one flush window rendering once at 100 ms and not at 99; a refused subscription reported with its code and retried; the link dropping while subscribed (control gone, reconnecting starts from `Off`) |
+| `apps/mobile/src/mock/__tests__/createMockBleClient.test.ts` ("pushes scripted notifications") | Scripted notifiers starting on subscribe, stopping on unsubscribe and with the link, property enforcement ("Notifications not supported"), scripted `failNextSetNotify`                                                                                                                                                                                                                                                                     |
+| `apps/mobile/ios/BeaconBluetoothTests/CharacteristicValueMapperTests.swift`                    | Every field mapped with canonical UUIDs, vendor UUIDs kept in their full form, a missing value sent as an empty packet, the payload matching the bridge shape, the subscription key built from the same canonical UUIDs as the event                                                                                                                                                                                                        |
+| `apps/mobile/android/app/src/test/.../mapping/NotificationDescriptorMapperTest.kt`             | `ENABLE_NOTIFICATION_VALUE` when the characteristic notifies and when it offers both, `ENABLE_INDICATION_VALUE` only when indications are all it offers, `DISABLE_NOTIFICATION_VALUE` whatever it offers, no value for a characteristic with neither, `CCCD_UUID` is the assigned number `0x2902`                                                                                                                                           |
+| `apps/mobile/android/app/src/test/.../mapping/GattStatusMapperTest.kt` (`requestRejection`)    | A refused subscription change keeping its own code and the peripheral's status; the API 33 request status codes telling acceptance, missing permission and rejection apart                                                                                                                                                                                                                                                                  |
+| `apps/mobile/android/app/src/test/.../mapping/BleUuidTest.kt` (`format`)                       | Platform UUIDs formatted in the uppercase hyphenated wire form the table and the value events share                                                                                                                                                                                                                                                                                                                                         |
+
 ## Mock BLE layer
 
-`apps/mobile/src/mock/createMockBleClient.ts` implements the client surface through M5 with
+`apps/mobile/src/mock/createMockBleClient.ts` implements the whole client surface with
 scripted peripherals that advertise on their own intervals with drifting RSSI, connect through
 every transition, serve a scripted GATT table and characteristic values (`values` in
-`mockPeripherals.ts`), store writes so the next read returns them, enforce the characteristic
-properties the way native does ("Read not permitted" / "Write not permitted"), and refuse to
-scan or connect when the simulated radio is off or permission is missing. Hooks script failures
-(`failNextScanStart`, `failRunningScan`, `setAdapterState`, `failNextConnect`,
-`stallNextConnect`, `dropConnection`, `failNextRead`, `failNextWrite`) and `valueOf` reads back
-what a write stored. It takes an injectable scheduler, clock and random source, so its own
-tests are deterministic. It is a runtime option (`USE_MOCK_BLE_CLIENT` in
-`apps/mobile/src/app/runtimeOptions.ts`) so reviewers can run Beacon without hardware; M10
-completes it with notifications and the remaining failure scenarios.
+`mockPeripherals.ts`), store writes so the next read returns them, push notifications and
+indications on scripted intervals once subscribed (`notifiers` in `mockPeripherals.ts`, a
+`MockNotifier` per characteristic with `intervalMs` and a `produce(sequence, random)` value
+builder: a drifting heart rate every second, a battery level every 5 s, a weight measurement
+indication every 2 s, Nordic UART TX every 300 ms) and stop them with the link, enforce the
+characteristic properties the way native does ("Read not permitted" / "Write not permitted" /
+"Notifications not supported"), and refuse to scan or connect when the simulated radio is off
+or permission is missing. Hooks script failures (`failNextScanStart`, `failRunningScan`,
+`setAdapterState`, `failNextConnect`, `stallNextConnect`, `dropConnection`, `failNextRead`,
+`failNextWrite`, `failNextSetNotify`), `valueOf` reads back what a write stored and
+`isNotifying` tells whether a notifier is running. It takes an injectable scheduler, clock and
+random source, so its own tests are deterministic. It is a
+runtime option (`USE_MOCK_BLE_CLIENT` in `apps/mobile/src/app/runtimeOptions.ts`) so reviewers
+can run Beacon without hardware; M10 completes it with the remaining failure scenarios.
 
 ## Hardware validation
 

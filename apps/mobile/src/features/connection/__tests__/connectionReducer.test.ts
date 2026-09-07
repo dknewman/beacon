@@ -125,6 +125,23 @@ describe('connectionsReducer', () => {
     ).toBe(ready);
   });
 
+  it('ignores operation-level errors so a failed read or subscription does not fail the link', () => {
+    const ready = apply([
+      { type: 'connect_requested', deviceId: id, at: 1 },
+      { type: 'native_state_received', deviceId: id, state: 'ready', at: 2 },
+    ]);
+    for (const code of ['read_failed', 'write_failed', 'subscription_failed'] as const) {
+      expect(
+        connectionsReducer(ready, {
+          type: 'native_error_received',
+          deviceId: id,
+          error: new BleError({ code, message: 'operation failed' }),
+          at: 3,
+        }),
+      ).toBe(ready);
+    }
+  });
+
   it('keeps devices independent', () => {
     const state = apply([
       { type: 'connect_requested', deviceId: 'a', at: 1 },
