@@ -10,6 +10,7 @@ import React, {
 } from 'react';
 import { BleError, toBleError } from '@beacon/ble-contracts';
 import { useBleClient } from '../../native/BleClientContext';
+import { useActivityBus } from '../activity/ActivityBusProvider';
 import {
   connectionOf,
   connectionsReducer,
@@ -58,12 +59,15 @@ const ConnectionContext = createContext<ConnectionCoordinator | undefined>(undef
  * - Device-scoped `ble.error` events (connection failure, remote disconnect)
  *   move that device to `failed`; the `disconnected` state native sends next
  *   keeps the error as `lastError`.
+ * - Every native state change, device error and RSSI reading is published on
+ *   the activity bus so a running session records it.
  */
 export function ConnectionProvider({
   connectTimeoutMs = DEFAULT_CONNECT_TIMEOUT_MS,
   children,
 }: PropsWithChildren<ConnectionProviderProps>): React.JSX.Element {
   const client = useBleClient();
+  const bus = useActivityBus();
   const [connections, dispatch] = useReducer(connectionsReducer, initialConnectionsState);
   const timeouts = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   /** Attempts JavaScript ended (cancel, timeout): their rejection is expected, not an error. */
@@ -76,6 +80,18 @@ export function ConnectionProvider({
       timeouts.current.delete(deviceId);
     }
   }, []);
+
+  const publishError = useCallback(
+    (deviceId: string, error: BleError) => {
+      bus.publish({
+        deviceId,
+        kind: 'error',
+        error: error.toInfo(),
+        timestamp: new Date().toISOString(),
+      });
+    },
+    [bus],
+  );
 
   useEffect(() => {
     const unsubscribe = client.subscribe(event => {
@@ -90,16 +106,24 @@ export function ConnectionProvider({
             state: event.state,
             at: Date.now(),
           });
+          bus.publish({
+            deviceId: event.deviceId,
+            kind: 'connection',
+            state: event.state,
+            timestamp: new Date().toISOString(),
+          });
           break;
         case 'ble.error':
           if (event.deviceId !== undefined) {
             clearTimeoutFor(event.deviceId);
+            const error = toBleError(event.error);
             dispatch({
               type: 'native_error_received',
               deviceId: event.deviceId,
-              error: toBleError(event.error),
+              error,
               at: Date.now(),
             });
+            publishError(event.deviceId, error);
           }
           break;
         default:
@@ -112,7 +136,7 @@ export function ConnectionProvider({
       pending.forEach(handle => clearTimeout(handle));
       pending.clear();
     };
-  }, [client, clearTimeoutFor]);
+  }, [bus, client, clearTimeoutFor, publishError]);
 
   const connectionsRef = useRef(connections);
   connectionsRef.current = connections;
@@ -131,15 +155,12 @@ export function ConnectionProvider({
         setTimeout(() => {
           timeouts.current.delete(deviceId);
           cancelledAttempts.current.add(deviceId);
-          dispatch({
-            type: 'request_failed',
-            deviceId,
-            error: new BleError({
-              code: 'connection_timeout',
-              message: `No connection after ${Math.round(connectTimeoutMs / 1000)} s`,
-            }),
-            at: Date.now(),
+          const error = new BleError({
+            code: 'connection_timeout',
+            message: `No connection after ${Math.round(connectTimeoutMs / 1000)} s`,
           });
+          dispatch({ type: 'request_failed', deviceId, error, at: Date.now() });
+          publishError(deviceId, error);
           client.disconnect(deviceId).catch(() => undefined);
         }, connectTimeoutMs),
       );
@@ -156,16 +177,13 @@ export function ConnectionProvider({
             // JavaScript ended this attempt itself; the reducer already knows why.
             return;
           }
-          dispatch({
-            type: 'request_failed',
-            deviceId,
-            error: toBleError(error, 'connection_failed'),
-            at: Date.now(),
-          });
+          const failure = toBleError(error, 'connection_failed');
+          dispatch({ type: 'request_failed', deviceId, error: failure, at: Date.now() });
+          publishError(deviceId, failure);
         },
       );
     },
-    [client, clearTimeoutFor, connectTimeoutMs],
+    [client, clearTimeoutFor, connectTimeoutMs, publishError],
   );
 
   const disconnect = useCallback(
@@ -176,18 +194,27 @@ export function ConnectionProvider({
       }
       dispatch({ type: 'disconnect_requested', deviceId, at: Date.now() });
       client.disconnect(deviceId).catch((error: unknown) => {
-        dispatch({
-          type: 'request_failed',
-          deviceId,
-          error: toBleError(error, 'native_failure'),
-          at: Date.now(),
-        });
+        const failure = toBleError(error, 'native_failure');
+        dispatch({ type: 'request_failed', deviceId, error: failure, at: Date.now() });
+        publishError(deviceId, failure);
       });
     },
-    [client, clearTimeoutFor],
+    [client, clearTimeoutFor, publishError],
   );
 
-  const readRssi = useCallback((deviceId: string) => client.readRssi(deviceId), [client]);
+  const readRssi = useCallback(
+    (deviceId: string) =>
+      client.readRssi(deviceId).then(rssi => {
+        bus.publish({
+          deviceId,
+          kind: 'rssi',
+          rssi,
+          timestamp: new Date().toISOString(),
+        });
+        return rssi;
+      }),
+    [bus, client],
+  );
 
   const value = useMemo<ConnectionCoordinator>(
     () => ({

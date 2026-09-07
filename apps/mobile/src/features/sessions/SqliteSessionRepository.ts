@@ -5,7 +5,8 @@ import {
   type SessionEventInput,
 } from '@beacon/ble-contracts';
 import { parseBleSession, parseSessionEventInput } from '@beacon/validation';
-import type { SqlDatabase, SqlExecutor, SqlRow } from '../../storage/SqlDatabase';
+import { migrate, SCHEMA_MIGRATIONS } from '../../storage/migrations';
+import type { SqlDatabase, SqlRow } from '../../storage/SqlDatabase';
 import {
   createSessionId,
   eventIdOf,
@@ -187,10 +188,9 @@ export class SqliteSessionRepository implements SessionRepository {
 /** Opens the schema on a fresh or existing database before the repository uses it. */
 export async function prepareSessionDatabase(
   db: SqlDatabase,
-  migrateSchema: (db: SqlDatabase) => Promise<number[]>,
+  migrateSchema: (target: SqlDatabase) => Promise<number[]> = target =>
+    migrate(target, SCHEMA_MIGRATIONS),
 ): Promise<void> {
   await db.execute('PRAGMA foreign_keys = ON');
   await migrateSchema(db);
 }
-
-export type { SqlExecutor };

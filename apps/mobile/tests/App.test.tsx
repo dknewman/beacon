@@ -7,6 +7,7 @@ import type {
   ScanDeviceDiscoveredEvent,
 } from '@beacon/ble-contracts';
 import { App } from '../src/app/App';
+import { InMemorySessionRepository } from '../src/features/sessions/InMemorySessionRepository';
 import { FakeBleClient } from './fakes/FakeBleClient';
 
 const readiness = () => screen.getByTestId('bluetooth-readiness-value');
@@ -46,7 +47,9 @@ beforeEach(() => {
 describe('App (adapter + permission readiness)', () => {
   it('shows checking until both native reads resolve, then ready', async () => {
     const client = new FakeBleClient();
-    await render(<App bleClient={client} />);
+    await render(
+      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+    );
 
     expect(readiness()).toHaveTextContent('Checking');
     // Adapter hook, scan, connection and subscription coordinators each subscribe once.
@@ -63,7 +66,9 @@ describe('App (adapter + permission readiness)', () => {
 
   it('follows native adapter events without re-querying', async () => {
     const client = new FakeBleClient();
-    await render(<App bleClient={client} />);
+    await render(
+      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+    );
     await settle(client);
 
     await act(async () => {
@@ -76,7 +81,9 @@ describe('App (adapter + permission readiness)', () => {
 
   it('asks for permission first, then reflects the prompt result', async () => {
     const client = new FakeBleClient();
-    await render(<App bleClient={client} />);
+    await render(
+      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+    );
     // iOS reports "unknown" until authorization is decided; permission still wins.
     await settle(client, 'unknown', 'not_requested');
 
@@ -99,7 +106,9 @@ describe('App (adapter + permission readiness)', () => {
 
   it('sends blocked permission to app settings', async () => {
     const client = new FakeBleClient();
-    await render(<App bleClient={client} />);
+    await render(
+      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+    );
     await settle(client, 'powered_on', 'blocked');
 
     expect(readiness()).toHaveTextContent('Permission blocked');
@@ -110,7 +119,9 @@ describe('App (adapter + permission readiness)', () => {
 
   it('offers Bluetooth settings when the radio is off', async () => {
     const client = new FakeBleClient();
-    await render(<App bleClient={client} />);
+    await render(
+      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+    );
     await settle(client, 'powered_off', 'granted');
 
     expect(readiness()).toHaveTextContent('Bluetooth is off');
@@ -121,7 +132,9 @@ describe('App (adapter + permission readiness)', () => {
 
   it('re-reads permission when the app returns to the foreground', async () => {
     const client = new FakeBleClient();
-    await render(<App bleClient={client} />);
+    await render(
+      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+    );
     await settle(client, 'powered_on', 'blocked');
     expect(client.getPermissionStateCalls).toBe(1);
 
@@ -137,7 +150,9 @@ describe('App (adapter + permission readiness)', () => {
 
   it('ignores a foreground re-check while a prompt is in flight', async () => {
     const client = new FakeBleClient();
-    await render(<App bleClient={client} />);
+    await render(
+      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+    );
     await settle(client, 'powered_on', 'denied');
 
     await fireEvent.press(screen.getByTestId('bluetooth-action'));
@@ -155,7 +170,9 @@ describe('App (adapter + permission readiness)', () => {
 
   it('surfaces native failures with the error code and retries both reads', async () => {
     const client = new FakeBleClient();
-    await render(<App bleClient={client} />);
+    await render(
+      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+    );
 
     await act(async () => {
       client.rejectBluetoothState(
@@ -181,7 +198,9 @@ describe('App (adapter + permission readiness)', () => {
 
   it('reports a failed permission request without losing the adapter state', async () => {
     const client = new FakeBleClient();
-    await render(<App bleClient={client} />);
+    await render(
+      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+    );
     await settle(client, 'powered_on', 'not_requested');
 
     await fireEvent.press(screen.getByTestId('bluetooth-action'));
@@ -201,7 +220,9 @@ describe('App (adapter + permission readiness)', () => {
 
   it('surfaces adapter-level ble.error events from the bridge', async () => {
     const client = new FakeBleClient();
-    await render(<App bleClient={client} />);
+    await render(
+      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+    );
     await settle(client);
 
     await act(async () => {
@@ -216,7 +237,9 @@ describe('App (adapter + permission readiness)', () => {
 
   it('exposes status rows as single accessible elements with text state', async () => {
     const client = new FakeBleClient();
-    await render(<App bleClient={client} />);
+    await render(
+      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+    );
     await settle(client, 'powered_on', 'denied');
     expect(
       screen.getByLabelText(
@@ -227,7 +250,9 @@ describe('App (adapter + permission readiness)', () => {
 
   it('removes native subscriptions on unmount', async () => {
     const client = new FakeBleClient();
-    const view = await render(<App bleClient={client} />);
+    const view = await render(
+      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+    );
     expect(client.listenerCount).toBe(4);
     await view.unmount();
     expect(client.listenerCount).toBe(0);
@@ -263,7 +288,9 @@ function advertisement(
 /** Renders, settles readiness as ready, and starts a scan that native has accepted. */
 async function renderScanning() {
   const client = new FakeBleClient();
-  await render(<App bleClient={client} />);
+  await render(
+    <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+  );
   await settle(client);
   await fireEvent.press(scanButton());
   await act(async () => {
@@ -276,7 +303,9 @@ async function renderScanning() {
 describe('App (device scanning)', () => {
   it('keeps the scan control disabled until Bluetooth is ready', async () => {
     const client = new FakeBleClient();
-    await render(<App bleClient={client} />);
+    await render(
+      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+    );
     expect(scanButton()).toBeDisabled();
     await settle(client, 'powered_off', 'granted');
     expect(scanButton()).toBeDisabled();
@@ -286,7 +315,9 @@ describe('App (device scanning)', () => {
 
   it('starts, lists discovered devices without duplicates, updates RSSI, and stops', async () => {
     const client = new FakeBleClient();
-    await render(<App bleClient={client} />);
+    await render(
+      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+    );
     await settle(client);
 
     await fireEvent.press(scanButton());
@@ -442,7 +473,9 @@ describe('App (device scanning)', () => {
 
   it('reports a rejected start with its code and allows another attempt', async () => {
     const client = new FakeBleClient();
-    await render(<App bleClient={client} />);
+    await render(
+      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+    );
     await settle(client);
     await fireEvent.press(scanButton());
     await act(async () => {
@@ -480,7 +513,9 @@ describe('App (device scanning)', () => {
 
   it('waits for an in-flight start before stopping', async () => {
     const client = new FakeBleClient();
-    await render(<App bleClient={client} />);
+    await render(
+      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+    );
     await settle(client);
     await fireEvent.press(scanButton());
     // Stop requested while native has not acknowledged the start yet.
@@ -500,7 +535,9 @@ describe('App (device scanning)', () => {
 
   it('stops an active scan on unmount', async () => {
     const client = new FakeBleClient();
-    const view = await render(<App bleClient={client} />);
+    const view = await render(
+      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+    );
     await settle(client);
     await fireEvent.press(scanButton());
     await act(async () => {

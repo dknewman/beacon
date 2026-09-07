@@ -1,10 +1,13 @@
 import React from 'react';
 import { NavigationContainer, DarkTheme, DefaultTheme } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { ActivityBusProvider } from '../features/activity/ActivityBusProvider';
 import { ConnectionProvider } from '../features/connection/ConnectionProvider';
 import { GattProvider } from '../features/gatt/GattProvider';
 import { PacketLogProvider } from '../features/packets/PacketLogProvider';
 import { ScanProvider } from '../features/scan/ScanProvider';
+import type { SessionRepository } from '../features/sessions/SessionRepository';
+import { SessionRecorderProvider } from '../features/sessions/SessionRecorderProvider';
 import { SubscriptionProvider } from '../features/subscriptions/SubscriptionProvider';
 import type { BleClient } from '../native/BleClient';
 import { BleClientProvider } from '../native/BleClientContext';
@@ -13,27 +16,34 @@ import { RootNavigator } from './navigation/RootNavigator';
 
 export interface AppProps {
   bleClient: BleClient;
+  sessionRepository: SessionRepository;
 }
 
 /**
  * Provider order matters: the BLE client feeds the coordinators, the
- * coordinators sit above navigation so their state survives screen changes.
+ * coordinators publish on the activity bus above them, the session recorder
+ * below them listens, and all of it sits above navigation so state survives
+ * screen changes.
  */
-export function App({ bleClient }: AppProps): React.JSX.Element {
+export function App({ bleClient, sessionRepository }: AppProps): React.JSX.Element {
   return (
     <SafeAreaProvider>
       <BleClientProvider client={bleClient}>
-        <ScanProvider>
-          <ConnectionProvider>
-            <GattProvider>
-              <PacketLogProvider>
-                <SubscriptionProvider>
-                  <ThemedNavigation />
-                </SubscriptionProvider>
-              </PacketLogProvider>
-            </GattProvider>
-          </ConnectionProvider>
-        </ScanProvider>
+        <ActivityBusProvider>
+          <ScanProvider>
+            <ConnectionProvider>
+              <GattProvider>
+                <PacketLogProvider>
+                  <SubscriptionProvider>
+                    <SessionRecorderProvider repository={sessionRepository}>
+                      <ThemedNavigation />
+                    </SessionRecorderProvider>
+                  </SubscriptionProvider>
+                </PacketLogProvider>
+              </GattProvider>
+            </ConnectionProvider>
+          </ScanProvider>
+        </ActivityBusProvider>
       </BleClientProvider>
     </SafeAreaProvider>
   );

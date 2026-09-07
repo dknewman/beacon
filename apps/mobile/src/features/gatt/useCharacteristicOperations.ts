@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
 import { toBleError, type WriteMode } from '@beacon/ble-contracts';
 import { useBleClient } from '../../native/BleClientContext';
+import { useActivityBus } from '../activity/ActivityBusProvider';
 import { createPacket } from '../packets/packetLogReducer';
 import { usePacketLog } from '../packets/PacketLogProvider';
 import {
@@ -21,7 +22,8 @@ export interface CharacteristicOperations {
  * Drives reads and writes for one characteristic and records every result in
  * the packet log (PROJECT.md 16): a successful read lands as an incoming
  * packet, a successful write as an outgoing one. Failures stay in the local
- * outcome so the screen can show the code; nothing is logged for them.
+ * outcome so the screen can show the code; nothing is logged for them. Each
+ * success is also published on the activity bus for the session recorder.
  */
 export function useCharacteristicOperations(
   deviceId: string,
@@ -29,6 +31,7 @@ export function useCharacteristicOperations(
   characteristicUuid: string,
 ): CharacteristicOperations {
   const client = useBleClient();
+  const bus = useActivityBus();
   const { record } = usePacketLog();
   const [state, dispatch] = useReducer(
     characteristicOperationReducer,
@@ -61,6 +64,14 @@ export function useCharacteristicOperations(
           bytes,
         });
         record(packet);
+        bus.publish({
+          deviceId,
+          kind: 'read',
+          serviceUuid,
+          characteristicUuid,
+          bytes,
+          timestamp: packet.timestamp,
+        });
         if (mounted.current) {
           dispatch({
             type: 'read_succeeded',
@@ -79,7 +90,7 @@ export function useCharacteristicOperations(
         }
       },
     );
-  }, [client, deviceId, serviceUuid, characteristicUuid, record]);
+  }, [bus, client, deviceId, serviceUuid, characteristicUuid, record]);
 
   const write = useCallback(
     (bytes: number[], mode: WriteMode) => {
@@ -107,6 +118,14 @@ export function useCharacteristicOperations(
               bytes: payload,
             });
             record(packet);
+            bus.publish({
+              deviceId,
+              kind: 'write',
+              serviceUuid,
+              characteristicUuid,
+              bytes: payload,
+              timestamp: packet.timestamp,
+            });
             if (mounted.current) {
               dispatch({
                 type: 'write_succeeded',
@@ -128,7 +147,7 @@ export function useCharacteristicOperations(
           },
         );
     },
-    [client, deviceId, serviceUuid, characteristicUuid, record],
+    [bus, client, deviceId, serviceUuid, characteristicUuid, record],
   );
 
   return useMemo(() => ({ state, read, write }), [state, read, write]);

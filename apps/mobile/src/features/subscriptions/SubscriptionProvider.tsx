@@ -10,6 +10,7 @@ import React, {
 } from 'react';
 import { toBleError, type BlePacket } from '@beacon/ble-contracts';
 import { useBleClient } from '../../native/BleClientContext';
+import { useActivityBus } from '../activity/ActivityBusProvider';
 import { useConnections } from '../connection/ConnectionProvider';
 import { createPacket } from '../packets/packetLogReducer';
 import { usePacketLog } from '../packets/PacketLogProvider';
@@ -63,6 +64,7 @@ export function SubscriptionProvider({
   children,
 }: PropsWithChildren<SubscriptionProviderProps>): React.JSX.Element {
   const client = useBleClient();
+  const bus = useActivityBus();
   const { connections } = useConnections();
   const { recordMany } = usePacketLog();
   const [state, dispatch] = useReducer(subscriptionsReducer, initialSubscriptionsState);
@@ -79,6 +81,16 @@ export function SubscriptionProvider({
     }
     buffer.current = [];
     recordMany(packets);
+    for (const packet of packets) {
+      bus.publish({
+        deviceId: packet.deviceId,
+        kind: 'notification',
+        serviceUuid: packet.serviceUuid,
+        characteristicUuid: packet.characteristicUuid,
+        bytes: packet.bytes,
+        timestamp: packet.timestamp,
+      });
+    }
     const counts = new Map<string, { count: number; at: string }>();
     for (const packet of packets) {
       const key = subscriptionKey(
@@ -98,7 +110,7 @@ export function SubscriptionProvider({
       type: 'values_received',
       counts: [...counts.entries()].map(([key, entry]) => ({ key, ...entry })),
     });
-  }, [recordMany]);
+  }, [bus, recordMany]);
 
   useEffect(() => {
     const unsubscribe = client.subscribe(event => {
@@ -136,6 +148,25 @@ export function SubscriptionProvider({
     });
   }, [connections]);
 
+  const publishSubscription = useCallback(
+    (
+      deviceId: string,
+      serviceUuid: string,
+      characteristicUuid: string,
+      enabled: boolean,
+    ) => {
+      bus.publish({
+        deviceId,
+        kind: 'subscription',
+        serviceUuid,
+        characteristicUuid,
+        enabled,
+        timestamp: new Date().toISOString(),
+      });
+    },
+    [bus],
+  );
+
   const subscribe = useCallback(
     (deviceId: string, serviceUuid: string, characteristicUuid: string) => {
       const key = subscriptionKey(deviceId, serviceUuid, characteristicUuid);
@@ -144,7 +175,10 @@ export function SubscriptionProvider({
       }
       dispatch({ type: 'subscribe_requested', key });
       client.setNotify({ deviceId, serviceUuid, characteristicUuid, enabled: true }).then(
-        () => dispatch({ type: 'subscribe_succeeded', key }),
+        () => {
+          dispatch({ type: 'subscribe_succeeded', key });
+          publishSubscription(deviceId, serviceUuid, characteristicUuid, true);
+        },
         (error: unknown) =>
           dispatch({
             type: 'subscribe_failed',
@@ -153,7 +187,7 @@ export function SubscriptionProvider({
           }),
       );
     },
-    [client],
+    [client, publishSubscription],
   );
 
   const unsubscribe = useCallback(
@@ -166,7 +200,10 @@ export function SubscriptionProvider({
       client
         .setNotify({ deviceId, serviceUuid, characteristicUuid, enabled: false })
         .then(
-          () => dispatch({ type: 'unsubscribe_succeeded', key }),
+          () => {
+            dispatch({ type: 'unsubscribe_succeeded', key });
+            publishSubscription(deviceId, serviceUuid, characteristicUuid, false);
+          },
           (error: unknown) =>
             dispatch({
               type: 'unsubscribe_failed',
@@ -175,7 +212,7 @@ export function SubscriptionProvider({
             }),
         );
     },
-    [client],
+    [client, publishSubscription],
   );
 
   const value = useMemo<SubscriptionCoordinator>(

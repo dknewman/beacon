@@ -1,5 +1,4 @@
 import { createSqlJsDatabase } from '../../../../tests/fakes/SqlJsDatabase';
-import { migrate } from '../../../storage/migrations';
 import type { SqlDatabase } from '../../../storage/SqlDatabase';
 import {
   prepareSessionDatabase,
@@ -9,7 +8,7 @@ import { describeSessionRepositoryContract } from './sessionRepository.contract'
 
 async function openDatabase(): Promise<SqlDatabase> {
   const db = await createSqlJsDatabase();
-  await prepareSessionDatabase(db, migrate);
+  await prepareSessionDatabase(db);
   return db;
 }
 
