@@ -11,5 +11,6 @@
 | [0007](0007-buffered-notification-pipeline.md)              | Buffered notification pipeline; subscriptions from acks   | Accepted |
 | [0008](0008-parser-registry.md)                             | Parser package; ordered registry with raw fallback        | Accepted |
 | [0009](0009-session-persistence.md)                         | Sessions in SQLite behind a repository; activity bus      | Accepted |
+| [0010](0010-export-formats-and-share-pipeline.md)           | JSON and CSV exports; a separate share Turbo Module       | Accepted |
 
-Planned: export (M9).
+Planned: mock peripheral environment (M10).

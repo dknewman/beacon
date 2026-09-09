@@ -6,29 +6,40 @@ Native consumes a narrow typed bridge; state is explicit.
 
 ## Layers
 
-| Layer          | Location                                                                          | Owns                                                                                   | Must not                                 |
-| -------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------- |
-| UI             | `apps/mobile/src/features/**/*Screen.tsx`, `src/components`, `src/app/navigation` | Rendering, accessibility, user intent, routes by id                                    | Call the bridge directly, hold BLE state |
-| Application    | `apps/mobile/src/features/**` (reducers, hooks, coordinators, providers)          | Explicit state machines, orchestration, buffering                                      | Import platform APIs                     |
-| Contracts      | `packages/ble-contracts`                                                          | Domain models, state unions, error codes, `NativeBleClient` segments, `NativeBleEvent` | Depend on React Native                   |
-| Validation     | `packages/validation`                                                             | zod schemas for every boundary payload and for parser output, `ValidationResult`       | Know about UI                            |
-| Parsers        | `packages/protocol-parsers`                                                       | `ByteReader`, the SIG and text parsers, the registry, `ParseOutcome`                   | Import UI or application code            |
-| Storage        | `apps/mobile/src/storage`                                                         | `SqlDatabase` surface, op-sqlite binding, versioned migrations                         | Know the domain: rows in, rows out       |
-| Bridge wrapper | `apps/mobile/src/native`                                                          | Codegen spec, `createNativeBleClient`, dependency injection context, mock client       | Contain BLE policy                       |
-| Native         | `apps/mobile/ios/BeaconBluetooth`, `apps/mobile/android/.../bluetooth`            | CoreBluetooth / BluetoothGatt, GATT queue, event emission, error mapping               | Trust JS for connection state            |
+| Layer          | Location                                                                          | Owns                                                                                                 | Must not                                 |
+| -------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| UI             | `apps/mobile/src/features/**/*Screen.tsx`, `src/components`, `src/app/navigation` | Rendering, accessibility, user intent, routes by id                                                  | Call the bridge directly, hold BLE state |
+| Application    | `apps/mobile/src/features/**` (reducers, hooks, coordinators, providers)          | Explicit state machines, orchestration, buffering                                                    | Import platform APIs                     |
+| Contracts      | `packages/ble-contracts`                                                          | Domain models, state unions, error codes, `NativeBleClient` segments, `NativeBleEvent`               | Depend on React Native                   |
+| Validation     | `packages/validation`                                                             | zod schemas for every boundary payload and for parser output, `ValidationResult`                     | Know about UI                            |
+| Parsers        | `packages/protocol-parsers`                                                       | `ByteReader`, the SIG and text parsers, the registry, `ParseOutcome`                                 | Import UI or application code            |
+| Export         | `packages/session-export`                                                         | JSON and CSV serializers, canonical key order, file names, `ExportErrorCode`                         | Touch a file system or the bridge        |
+| Storage        | `apps/mobile/src/storage`                                                         | `SqlDatabase` surface, op-sqlite binding, versioned migrations                                       | Know the domain: rows in, rows out       |
+| Bridge wrapper | `apps/mobile/src/native`                                                          | Codegen specs, `createNativeBleClient` / `createNativeExportClient`, injection contexts, mock client | Contain BLE or export policy             |
+| Native         | `apps/mobile/ios/BeaconBluetooth`, `apps/mobile/android/.../bluetooth`            | CoreBluetooth / BluetoothGatt, GATT queue, event emission, error mapping                             | Trust JS for connection state            |
+| Native export  | `apps/mobile/ios/BeaconExport`, `apps/mobile/android/.../export`                  | The temporary export directory, path containment, the platform share sheet                           | Know what a session is                   |
 
 Dependency direction is strictly downward in the table. `packages/*` never import from
 `apps/mobile`. Among the packages the direction is `ble-contracts` ← `validation` ←
 `protocol-parsers` ← `apps/mobile`: the contracts know nothing of validation, validation
-knows nothing of the parsers, and the parsers know nothing of the app.
+knows nothing of the parsers, and the parsers know nothing of the app. `session-export` sits
+next to the parsers on `ble-contracts` and `validation` and likewise knows nothing of the app:
+it turns a session into text, and something else decides where the text goes.
 
-## Data flow (M0–M8)
+## Data flow (M0–M9)
 
 ```text
 NavigationContainer ─ DeviceListScreen ──► DeviceDetailScreen ──► GattInspectorScreen ──► CharacteristicDetailScreen
    ▲ reads                                 ▲ reads by id, polls RSSI      ▲ reads the cached table by id   ▲ reads, writes, subscribes, lists packets
    │                                       │ Start / Stop session ──► SessionHistoryScreen ──► SessionDetailScreen      │ parsePacket / packetSummary (@beacon/protocol-parsers) over the packet log, at render time
    │                                       ▼                          ▲ listSessions (refetch on revision)  ▲ getSession + listEvents, summarizeSession, live while recording
+   │                                                                                                       │ Export JSON / Export CSV (disabled while recording)
+   │                                                                                                       ▼
+   │                                                                    useSessionExport: export machine (idle → preparing → sharing), one at a time
+   │                                                                       │ getSession + listEvents (the whole session, not the loaded page)
+   │                                                                       │ toJsonExport / toCsvExport, exportFileName, EXPORT_MIME_TYPES (@beacon/session-export)
+   │                                                                       ▼
+   │                                                                    createNativeExportClient ── writeTemporaryFile / shareFile / clearTemporaryFiles ──► NativeBeaconExport
 SessionRecorderProvider: per-device recording machine, per-device buffer, 250 ms / 200-event appends ──► SessionRepository (SQLite via op-sqlite, opened lazily) ── storage/SqlDatabase ── migrations (user_version)
    ▲ subscribe
 ActivityBus: publish { deviceId, ...SessionEventInput }  ◄── connection / error / rssi ── services_discovered ── read / write ── subscription / notification
@@ -47,6 +58,11 @@ NativeBeaconBluetooth (Turbo Module spec, codegen)
    │
    ├─ iOS: BeaconBluetoothModule.mm → BluetoothManager.swift (+ PeripheralSession, GattOperationQueue) → CBCentralManager / CBPeripheral
    └─ Android: BeaconBluetoothModule.kt → BluetoothController / BleScanner / ConnectionRegistry (+ DeviceConnection, GattOperationQueue) → BluetoothAdapter / BluetoothLeScanner / BluetoothGatt
+
+NativeBeaconExport (second Turbo Module spec, codegen)
+   │ rejections carry ExportErrorCode; createNativeExportClient maps them with toExportError
+   ├─ iOS: BeaconExportModule.mm → ExportManager.swift (+ ExportFileStore, ShareSheetPresenter) → UIActivityViewController
+   └─ Android: BeaconExportModule.kt (+ ExportFileStore) → FileProvider "${applicationId}.exports" → Intent.createChooser
 ```
 
 Ordering rule: subscribe to events before the initial read so a transition during the read is
@@ -54,22 +70,26 @@ not lost. Late results after unmount are ignored by an `active` flag in the effe
 coordinator is the only caller of `ScanApi`, the connection coordinator the only caller of
 `ConnectionApi`, `useCharacteristicOperations` the only caller of `GattValueApi`, and the
 subscription provider the only caller of `GattNotifyApi`, and the session recorder the only
-subscriber of the activity bus and the only writer of the session repository; screens express
-intent (`start`, `stop`, `connect`, `disconnect`, `read`, `write`, `subscribe`,
-`unsubscribe`, `startSession`, `stopSession`) and read derived state. The coordinators live
-above the navigator (ADR 0005), so scanning, links, subscriptions, the packet history and a
-running recording survive screen changes.
+subscriber of the activity bus and the only writer of the session repository, and
+`useSessionExport` the only caller of the export client; screens express intent (`start`,
+`stop`, `connect`, `disconnect`, `read`, `write`, `subscribe`, `unsubscribe`, `startSession`,
+`stopSession`, `exportSession`) and read derived state. The coordinators live above the
+navigator (ADR 0005), so scanning, links, subscriptions, the packet history and a running
+recording survive screen changes.
 
-Provider order in `App.tsx`, outermost first: `BleClientProvider` → `ActivityBusProvider` →
-`ScanProvider` → `ConnectionProvider` → `GattProvider` → `PacketLogProvider` →
-`SubscriptionProvider` → `SessionRecorderProvider` → navigation. Each provider may read the
-ones above it (the GATT provider watches the connection machine to drop a table with its
-link; the packet log is written by the characteristic operations hook underneath it and by
-the subscription provider's flush; the subscription provider watches the connection machine
-to drop subscriptions with their link; the connection, GATT and subscription providers and
-the characteristic operations hook publish to the activity bus above them; the recorder
-below them all subscribes to it) and never the ones below. A coordinator that publishes must
-sit between the bus and the recorder.
+Provider order in `App.tsx`, outermost first: `ExportClientProvider` → `BleClientProvider` →
+`ActivityBusProvider` → `ScanProvider` → `ConnectionProvider` → `GattProvider` →
+`PacketLogProvider` → `SubscriptionProvider` → `SessionRecorderProvider` → navigation. Each
+provider may read the ones above it (the GATT provider watches the connection machine to drop
+a table with its link; the packet log is written by the characteristic operations hook
+underneath it and by the subscription provider's flush; the subscription provider watches the
+connection machine to drop subscriptions with their link; the connection, GATT and
+subscription providers and the characteristic operations hook publish to the activity bus
+above them; the recorder below them all subscribes to it) and never the ones below. A
+coordinator that publishes must sit between the bus and the recorder. The export client is
+outermost because it depends on nothing else: the export path reads the session repository and
+the platform, never the radio, so it has no reason to sit inside the BLE client and no
+ordering constraint against the coordinators.
 
 ## GATT operations and the packet log (M5)
 
@@ -256,17 +276,82 @@ in place. Delete (`deleteSession`, then `notifySessionsChanged`, then back) is o
 for an ended session; a deleted or unknown id shows "Session not found". Routes carry
 identifiers only, as before, and the screens read through `useSessionRecorder().repository`.
 
+## Export (M9)
+
+### Serializers
+
+`packages/session-export` (`@beacon/session-export`) turns a `BleSession` and its
+`SessionEvent`s into text and knows nothing else: no file system, no bridge, no React, the
+same isolation the parser package has. `json.ts` writes the full-fidelity document
+(PROJECT.md 21) — `version` (`JSON_EXPORT_VERSION`, 1), `generator`, `exportedAt`, `session`,
+`events` — and `parseJsonExport` reads one back through `parseBleSession` and
+`parseSessionEvent` (`@beacon/validation`), the same runtime schemas the repository validates
+its own rows with, so a truncated or hand-edited file fails at the boundary naming the field
+or the event index. `canonical.ts` rebuilds the session and every event kind with their keys
+in a fixed order, omitting absent optional fields rather than writing `null`, on both the
+write and the read path: JSON key order is not semantically meaningful, but a fixed one makes
+the output byte-stable, so two exports of a session are the same file and re-exporting a
+parsed document reproduces it. That is what lets a diff, a checksum or a signature over an
+export mean anything, and the tests hold both paths to it (ADR 0010).
+
+`csv.ts` writes the human-readable one: a `field,value` summary block naming the session, a
+blank line, then the `sequence,timestamp,kind,service,characteristic,detail,bytes,byteCount`
+header and one row per event, with SIG UUIDs shortened to `180D` / `2A37` (vendor UUIDs kept
+in full, `fullUuids` to keep every one), bytes as hex with a count, and a readable `detail`
+for the kinds that carry none. Columns a kind does not use are left empty rather than filled
+with a placeholder, so they stay sortable. Fields are quoted per RFC 4180 (a comma, a quote or
+a newline wraps the field and doubles its quotes), rows end with CRLF including the last, and
+a value beginning with a character a spreadsheet would treat as a formula is prefixed with a
+quote, so nothing that arrived over the air can execute when the file is opened.
+`fileName.ts` names the file `beacon-<device>-<start>.<format>`, sanitized to what every file
+system accepts, and maps each format to its media type; `errors.ts` holds `ExportErrorCode`
+and `toExportError`.
+
+### Bridge and machine
+
+`src/native/specs/NativeBeaconExport.ts` is a second Turbo Module spec with three calls —
+`writeTemporaryFile`, `shareFile`, `clearTemporaryFiles` — because writing a file and
+presenting a share sheet are not Bluetooth operations and do not belong on `BeaconBluetooth`
+(docs/NATIVE_BRIDGE.md, ADR 0010). `createNativeExportClient` wraps it in the `ExportClient`
+contract, type-checks what comes back (a module that returns no path or a non-boolean means
+the spec and native disagree, which is surfaced rather than coerced) and maps every rejection
+with `toExportError`. `ExportClientProvider` injects it, outermost of the providers.
+
+`features/export/exportReducer.ts` is the per-session machine: `idle` (with the previous
+`lastOutcome`), `preparing` while the document is built and written, `sharing` while the sheet
+is open. A request that arrives while anything is in flight is ignored rather than queued —
+one export at a time, because two sheets cannot be presented at once — and
+`useSessionExport(repository, sessionId)` guards the same rule with a ref so a second press
+cannot slip through before the re-render. The hook reads the session and every event from the
+repository itself rather than taking them from the screen, so the document is always the whole
+session and not the page the timeline happens to have loaded; it then serializes, writes the
+temporary file, moves to `sharing`, and settles on the share's answer.
+`exportPresentation.ts` is the pure text: button labels per format ("Export JSON",
+"Preparing JSON…", "Sharing CSV…"), the status line, and `EXPORT_PRIVACY_NOTE`. A completed
+share is reported as the file having been "handed to the share sheet", never as delivered,
+because that is the most either platform can prove; a dismissal is reported only when the
+platform actually saw one, which is iOS.
+
+`ExportControls.tsx` renders the two buttons, the status line as a polite live region and the
+privacy note, and `SessionDetailScreen` puts it in the footer above Delete. A session the
+recorder still holds open disables both buttons with "Stop the session before exporting it, so
+the file holds the whole recording": a file holding part of a session is worse than no file.
+Export is explicitly user-initiated (PROJECT.md 35) — there is no automatic path into this
+machine at all.
+
 ## Composition root
 
-`apps/mobile/src/app/bootstrap.tsx` is the only file that references the real Turbo Module
-and the on-device database. It creates the validated client and injects it through
+`apps/mobile/src/app/bootstrap.tsx` is the only file that references the real Turbo Modules
+and the on-device database. It creates the validated BLE client and injects it through
 `BleClientProvider`, or, when `USE_MOCK_BLE_CLIENT` is set in `runtimeOptions.ts`, the
-scripted mock client from `src/mock`; and it builds the session repository as
+scripted mock client from `src/mock`; it wraps `NativeBeaconExport` in
+`createNativeExportClient` for `ExportClientProvider`; and it builds the session repository as
 `createLazySessionRepository` over `openAppDatabase` + `prepareSessionDatabase` +
 `SqliteSessionRepository`, so SQLite is opened and migrated on first use and sessions are
-real even with the mock radio. `App` takes both as props. Tests render `App` with
-`FakeBleClient`, which keeps every native call pending until the test settles it, and
-`InMemorySessionRepository`.
+real even with the mock radio. `App` takes all three as props. Tests render `App` with
+`FakeBleClient`, which keeps every native call pending until the test settles it,
+`InMemorySessionRepository`, and `FakeExportClient`, which keeps the write and the share
+pending the same way.
 
 ## Contract segmentation
 
@@ -277,7 +362,8 @@ TypeScript, Swift and Kotlin, rather than stubbing unimplemented methods with fa
 `writeCharacteristic`) and `GattNotifyApi` (M6: `setNotify`). `BleClient` (the app's type) was
 the intersection of the segments implemented so far; since M6 every segment has a native
 implementation, so `BleClient` equals `NativeBleClient` and stays as the one name screens and
-tests depend on.
+tests depend on. `ExportClient` (M9) is a separate contract over a separate Turbo Module, not
+another segment of this one, and is composed nowhere into `BleClient`.
 
 ## State management
 
@@ -288,7 +374,9 @@ M5 the per-characteristic operation reducer and the per-device packet log, M6 th
 per-characteristic subscription reducer with its value buffer; M7 adds no state, because
 parsed values are derived from the packet log at render time; M8 the per-device recording
 reducer, whose source of truth for what was written is the session repository rather than
-React state; UI state and persisted preferences each get their own module as their
+React state; M9 the per-session export machine, which is local to the session detail screen
+because an export is one screen's action and outlives nothing; UI state and persisted
+preferences each get their own module as their
 milestones land. There is no global store: each concern is a reducer behind a provider or
 hook, and screens compose them.
 
@@ -344,6 +432,16 @@ Handled explicitly in native code and documented at the contract:
 - Subscriptions end with the link on both platforms without a per-characteristic callback
   (CoreBluetooth forgets `isNotifying`, Android's descriptor state dies with the closed
   client), so JavaScript drops them when the connection leaves `ready` rather than asking.
+- Sharing a file: iOS presents `UIActivityViewController` and its completion handler
+  distinguishes a completed activity from a dismissal, so `false` means dismissed. Android
+  starts `Intent.createChooser`, which finishes as soon as a target is picked; the target runs
+  in its own task and almost none report a result, so Android resolves `true` once the sheet
+  is presented and never reports a dismissal. The UI says a file "was handed to the share
+  sheet" on both, because that is all either can prove (ADR 0010).
+- Where the shared file lives: iOS shares a file URL from `<tmp>/beacon-exports` directly.
+  Android has no shareable file paths, so the file goes out as a `content://` URI from a
+  `FileProvider` scoped to `<cacheDir>/beacon-exports`, with a read grant on both the send
+  intent and the chooser. Both platforms refuse a path they did not write.
 
 ## Monorepo mechanics
 
