@@ -14,7 +14,9 @@ import type {
   ScanDeviceDiscoveredEvent,
 } from '@beacon/ble-contracts';
 import { App } from '../src/app/App';
+import { parseJsonExport } from '@beacon/session-export';
 import { InMemorySessionRepository } from '../src/features/sessions/InMemorySessionRepository';
+import { FakeExportClient } from './fakes/FakeExportClient';
 import { FakeBleClient } from './fakes/FakeBleClient';
 
 const readiness = () => screen.getByTestId('bluetooth-readiness-value');
@@ -55,7 +57,11 @@ describe('App (adapter + permission readiness)', () => {
   it('shows checking until both native reads resolve, then ready', async () => {
     const client = new FakeBleClient();
     await render(
-      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+      <App
+        bleClient={client}
+        sessionRepository={new InMemorySessionRepository()}
+        exportClient={new FakeExportClient()}
+      />,
     );
 
     expect(readiness()).toHaveTextContent('Checking');
@@ -74,7 +80,11 @@ describe('App (adapter + permission readiness)', () => {
   it('follows native adapter events without re-querying', async () => {
     const client = new FakeBleClient();
     await render(
-      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+      <App
+        bleClient={client}
+        sessionRepository={new InMemorySessionRepository()}
+        exportClient={new FakeExportClient()}
+      />,
     );
     await settle(client);
 
@@ -89,7 +99,11 @@ describe('App (adapter + permission readiness)', () => {
   it('asks for permission first, then reflects the prompt result', async () => {
     const client = new FakeBleClient();
     await render(
-      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+      <App
+        bleClient={client}
+        sessionRepository={new InMemorySessionRepository()}
+        exportClient={new FakeExportClient()}
+      />,
     );
     // iOS reports "unknown" until authorization is decided; permission still wins.
     await settle(client, 'unknown', 'not_requested');
@@ -114,7 +128,11 @@ describe('App (adapter + permission readiness)', () => {
   it('sends blocked permission to app settings', async () => {
     const client = new FakeBleClient();
     await render(
-      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+      <App
+        bleClient={client}
+        sessionRepository={new InMemorySessionRepository()}
+        exportClient={new FakeExportClient()}
+      />,
     );
     await settle(client, 'powered_on', 'blocked');
 
@@ -127,7 +145,11 @@ describe('App (adapter + permission readiness)', () => {
   it('offers Bluetooth settings when the radio is off', async () => {
     const client = new FakeBleClient();
     await render(
-      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+      <App
+        bleClient={client}
+        sessionRepository={new InMemorySessionRepository()}
+        exportClient={new FakeExportClient()}
+      />,
     );
     await settle(client, 'powered_off', 'granted');
 
@@ -140,7 +162,11 @@ describe('App (adapter + permission readiness)', () => {
   it('re-reads permission when the app returns to the foreground', async () => {
     const client = new FakeBleClient();
     await render(
-      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+      <App
+        bleClient={client}
+        sessionRepository={new InMemorySessionRepository()}
+        exportClient={new FakeExportClient()}
+      />,
     );
     await settle(client, 'powered_on', 'blocked');
     expect(client.getPermissionStateCalls).toBe(1);
@@ -158,7 +184,11 @@ describe('App (adapter + permission readiness)', () => {
   it('ignores a foreground re-check while a prompt is in flight', async () => {
     const client = new FakeBleClient();
     await render(
-      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+      <App
+        bleClient={client}
+        sessionRepository={new InMemorySessionRepository()}
+        exportClient={new FakeExportClient()}
+      />,
     );
     await settle(client, 'powered_on', 'denied');
 
@@ -178,7 +208,11 @@ describe('App (adapter + permission readiness)', () => {
   it('surfaces native failures with the error code and retries both reads', async () => {
     const client = new FakeBleClient();
     await render(
-      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+      <App
+        bleClient={client}
+        sessionRepository={new InMemorySessionRepository()}
+        exportClient={new FakeExportClient()}
+      />,
     );
 
     await act(async () => {
@@ -206,7 +240,11 @@ describe('App (adapter + permission readiness)', () => {
   it('reports a failed permission request without losing the adapter state', async () => {
     const client = new FakeBleClient();
     await render(
-      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+      <App
+        bleClient={client}
+        sessionRepository={new InMemorySessionRepository()}
+        exportClient={new FakeExportClient()}
+      />,
     );
     await settle(client, 'powered_on', 'not_requested');
 
@@ -228,7 +266,11 @@ describe('App (adapter + permission readiness)', () => {
   it('surfaces adapter-level ble.error events from the bridge', async () => {
     const client = new FakeBleClient();
     await render(
-      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+      <App
+        bleClient={client}
+        sessionRepository={new InMemorySessionRepository()}
+        exportClient={new FakeExportClient()}
+      />,
     );
     await settle(client);
 
@@ -245,7 +287,11 @@ describe('App (adapter + permission readiness)', () => {
   it('exposes status rows as single accessible elements with text state', async () => {
     const client = new FakeBleClient();
     await render(
-      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+      <App
+        bleClient={client}
+        sessionRepository={new InMemorySessionRepository()}
+        exportClient={new FakeExportClient()}
+      />,
     );
     await settle(client, 'powered_on', 'denied');
     expect(
@@ -258,7 +304,11 @@ describe('App (adapter + permission readiness)', () => {
   it('removes native subscriptions on unmount', async () => {
     const client = new FakeBleClient();
     const view = await render(
-      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+      <App
+        bleClient={client}
+        sessionRepository={new InMemorySessionRepository()}
+        exportClient={new FakeExportClient()}
+      />,
     );
     expect(client.listenerCount).toBe(4);
     await view.unmount();
@@ -293,9 +343,18 @@ function advertisement(
 }
 
 /** Renders, settles readiness as ready, and starts a scan that native has accepted. */
-async function renderScanning(sessionRepository = new InMemorySessionRepository()) {
+async function renderScanning(
+  sessionRepository = new InMemorySessionRepository(),
+  exportClient = new FakeExportClient(),
+) {
   const client = new FakeBleClient();
-  await render(<App bleClient={client} sessionRepository={sessionRepository} />);
+  await render(
+    <App
+      bleClient={client}
+      sessionRepository={sessionRepository}
+      exportClient={exportClient}
+    />,
+  );
   await settle(client);
   await fireEvent.press(scanButton());
   await act(async () => {
@@ -309,7 +368,11 @@ describe('App (device scanning)', () => {
   it('keeps the scan control disabled until Bluetooth is ready', async () => {
     const client = new FakeBleClient();
     await render(
-      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+      <App
+        bleClient={client}
+        sessionRepository={new InMemorySessionRepository()}
+        exportClient={new FakeExportClient()}
+      />,
     );
     expect(scanButton()).toBeDisabled();
     await settle(client, 'powered_off', 'granted');
@@ -321,7 +384,11 @@ describe('App (device scanning)', () => {
   it('starts, lists discovered devices without duplicates, updates RSSI, and stops', async () => {
     const client = new FakeBleClient();
     await render(
-      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+      <App
+        bleClient={client}
+        sessionRepository={new InMemorySessionRepository()}
+        exportClient={new FakeExportClient()}
+      />,
     );
     await settle(client);
 
@@ -479,7 +546,11 @@ describe('App (device scanning)', () => {
   it('reports a rejected start with its code and allows another attempt', async () => {
     const client = new FakeBleClient();
     await render(
-      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+      <App
+        bleClient={client}
+        sessionRepository={new InMemorySessionRepository()}
+        exportClient={new FakeExportClient()}
+      />,
     );
     await settle(client);
     await fireEvent.press(scanButton());
@@ -519,7 +590,11 @@ describe('App (device scanning)', () => {
   it('waits for an in-flight start before stopping', async () => {
     const client = new FakeBleClient();
     await render(
-      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+      <App
+        bleClient={client}
+        sessionRepository={new InMemorySessionRepository()}
+        exportClient={new FakeExportClient()}
+      />,
     );
     await settle(client);
     await fireEvent.press(scanButton());
@@ -541,7 +616,11 @@ describe('App (device scanning)', () => {
   it('stops an active scan on unmount', async () => {
     const client = new FakeBleClient();
     const view = await render(
-      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+      <App
+        bleClient={client}
+        sessionRepository={new InMemorySessionRepository()}
+        exportClient={new FakeExportClient()}
+      />,
     );
     await settle(client);
     await fireEvent.press(scanButton());
@@ -562,8 +641,9 @@ async function openDetail(
   id = 'scale',
   overrides: Partial<BleDevice> = {},
   sessionRepository = new InMemorySessionRepository(),
+  exportClient = new FakeExportClient(),
 ) {
-  const client = await renderScanning(sessionRepository);
+  const client = await renderScanning(sessionRepository, exportClient);
   await act(async () => {
     client.emit(advertisement(id, { name: 'QN Scale', rssi: -47, ...overrides }));
   });
@@ -1710,7 +1790,11 @@ describe('App (session recording)', () => {
   it('opens the history from the device list and shows the empty state', async () => {
     const client = new FakeBleClient();
     await render(
-      <App bleClient={client} sessionRepository={new InMemorySessionRepository()} />,
+      <App
+        bleClient={client}
+        sessionRepository={new InMemorySessionRepository()}
+        exportClient={new FakeExportClient()}
+      />,
     );
     await settle(client);
 
@@ -1735,7 +1819,13 @@ describe('App (session recording)', () => {
         available ? listSessions() : Promise.reject(new Error('Storage unavailable')),
       );
     const client = new FakeBleClient();
-    await render(<App bleClient={client} sessionRepository={repository} />);
+    await render(
+      <App
+        bleClient={client}
+        sessionRepository={repository}
+        exportClient={new FakeExportClient()}
+      />,
+    );
     await settle(client);
 
     await fireEvent.press(screen.getByTestId('open-sessions'));
@@ -1751,5 +1841,154 @@ describe('App (session recording)', () => {
     await fireEvent.press(screen.getByTestId('sessions-retry'));
     await waitFor(() => expect(screen.getByTestId('sessions-empty')).toBeOnTheScreen());
     expect(screen.queryByTestId('sessions-failed')).toBeNull();
+  });
+});
+
+/** Records a session, then opens it in the session detail screen. */
+async function openRecordedSession(
+  repository: InMemorySessionRepository,
+  exportClient: FakeExportClient,
+) {
+  const client = await openDetail('scale', {}, repository, exportClient);
+  await recordHeartRateSession(client);
+  await fireEvent.press(screen.getByTestId('session-history'));
+  const [session] = await repository.listSessions();
+  await fireEvent.press(screen.getByTestId(`session-${session?.id ?? ''}`));
+  await waitFor(() => expect(screen.getByTestId('export-controls')).toBeOnTheScreen());
+  return session;
+}
+
+const exportStatus = () => screen.getByTestId('export-status');
+
+describe('App (session export)', () => {
+  it('builds a JSON document of the whole session and hands it to the share sheet', async () => {
+    const repository = new InMemorySessionRepository();
+    const exportClient = new FakeExportClient();
+    const session = await openRecordedSession(repository, exportClient);
+
+    expect(screen.getByTestId('export-json')).toHaveTextContent(/Export JSON/);
+    expect(screen.getByTestId('export-privacy-note')).toHaveTextContent(
+      /device identifier/,
+    );
+
+    await fireEvent.press(screen.getByTestId('export-json'));
+    await waitFor(() => expect(exportStatus()).toHaveTextContent(/Building the JSON/));
+    expect(screen.getByTestId('export-json')).toBeDisabled();
+    expect(screen.getByTestId('export-csv')).toBeDisabled();
+
+    await waitFor(() => expect(exportClient.lastWritten).toBeDefined());
+    const written = exportClient.lastWritten;
+    expect(written?.fileName).toMatch(/^beacon-qn-scale-.*\.json$/);
+
+    // The document holds the session and every recorded event, not just what
+    // the timeline had paged in. Reading it back with the real parser also
+    // proves the file the app wrote is one the app can read.
+    const parsed = parseJsonExport(written?.contents ?? '');
+    expect(parsed.session.id).toBe(session?.id);
+    expect(parsed.events).toHaveLength(9);
+    expect(parsed.version).toBe(1);
+    expect(parsed.events.map(event => event.kind)).toContain('notification');
+
+    await act(async () => {
+      exportClient.resolveWrite();
+    });
+    await waitFor(() =>
+      expect(exportStatus()).toHaveTextContent(/open in the share sheet/),
+    );
+    expect(exportClient.shares[0]?.mimeType).toBe('application/json');
+
+    await act(async () => {
+      exportClient.resolveShare(true);
+    });
+    await waitFor(() =>
+      expect(exportStatus()).toHaveTextContent(/was handed to the share sheet/),
+    );
+    expect(screen.getByTestId('export-json')).not.toBeDisabled();
+  });
+
+  it('exports CSV with the session summary and one row per event', async () => {
+    const repository = new InMemorySessionRepository();
+    const exportClient = new FakeExportClient();
+    await openRecordedSession(repository, exportClient);
+
+    await fireEvent.press(screen.getByTestId('export-csv'));
+    await waitFor(() => expect(exportClient.lastWritten).toBeDefined());
+    const csv = exportClient.lastWritten?.contents ?? '';
+
+    expect(exportClient.lastWritten?.fileName).toMatch(/\.csv$/);
+    expect(csv).toContain('field,value');
+    expect(csv).toContain('deviceId,scale');
+    expect(csv).toContain('sequence,timestamp,kind,service,characteristic');
+    expect(csv).toContain('notification,180D,2A37');
+    expect(csv.trimEnd().split('\r\n')).toHaveLength(9 + 10);
+
+    await act(async () => {
+      exportClient.resolveWrite();
+    });
+    expect(exportClient.shares[0]?.mimeType).toBe('text/csv');
+  });
+
+  it('reports a dismissed share without claiming the file went anywhere', async () => {
+    const repository = new InMemorySessionRepository();
+    const exportClient = new FakeExportClient();
+    await openRecordedSession(repository, exportClient);
+
+    await fireEvent.press(screen.getByTestId('export-json'));
+    await waitFor(() => expect(exportClient.lastWritten).toBeDefined());
+    await act(async () => {
+      exportClient.resolveWrite();
+    });
+    await act(async () => {
+      exportClient.resolveShare(false);
+    });
+
+    await waitFor(() =>
+      expect(exportStatus()).toHaveTextContent(/closed without sharing/),
+    );
+  });
+
+  it('shows why an export failed and lets the person try again', async () => {
+    const repository = new InMemorySessionRepository();
+    const exportClient = new FakeExportClient();
+    await openRecordedSession(repository, exportClient);
+
+    await fireEvent.press(screen.getByTestId('export-json'));
+    await waitFor(() => expect(exportClient.lastWritten).toBeDefined());
+    await act(async () => {
+      exportClient.rejectWrite(
+        Object.assign(new Error('no space on device'), { code: 'export_write_failed' }),
+      );
+    });
+
+    await waitFor(() =>
+      expect(exportStatus()).toHaveTextContent(
+        /The JSON export failed: no space on device/,
+      ),
+    );
+    expect(screen.getByTestId('export-json')).not.toBeDisabled();
+
+    await fireEvent.press(screen.getByTestId('export-json'));
+    await waitFor(() => expect(exportStatus()).toHaveTextContent(/Building the JSON/));
+  });
+
+  it('refuses to export a session that is still recording', async () => {
+    const repository = new InMemorySessionRepository();
+    const exportClient = new FakeExportClient();
+    const client = await openDetail('scale', {}, repository, exportClient);
+
+    await fireEvent.press(screen.getByTestId('session-action'));
+    await waitFor(() =>
+      expect(screen.getByTestId('session-value')).toHaveTextContent('Recording'),
+    );
+    await fireEvent.press(screen.getByTestId('session-history'));
+    const [session] = await repository.listSessions();
+    await fireEvent.press(screen.getByTestId(`session-${session?.id ?? ''}`));
+
+    await waitFor(() => expect(screen.getByTestId('export-controls')).toBeOnTheScreen());
+    expect(screen.getByTestId('export-json')).toBeDisabled();
+    expect(screen.getByTestId('export-csv')).toBeDisabled();
+    expect(exportStatus()).toHaveTextContent(/Stop the session before exporting it/);
+    expect(exportClient.written).toHaveLength(0);
+    expect(client.listenerCount).toBeGreaterThan(0);
   });
 });

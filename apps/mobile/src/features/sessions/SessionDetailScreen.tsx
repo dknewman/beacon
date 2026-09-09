@@ -9,6 +9,8 @@ import type {
 } from '../../app/navigation/RootNavigator';
 import { PrimaryButton } from '../../components/PrimaryButton';
 import { StatusRow } from '../../components/StatusRow';
+import { ExportControls } from '../export/ExportControls';
+import { useSessionExport } from '../export/useSessionExport';
 import { useTheme } from '../../theme/useTheme';
 import { formatPacketTime } from '../packets/packetPresentation';
 import {
@@ -65,6 +67,8 @@ export function SessionDetailScreen(): React.JSX.Element {
     true,
     `${recorder.state.revision}:${live?.eventCount ?? -1}`,
   );
+
+  const { state: exportState, exportSession } = useSessionExport(repository, sessionId);
 
   const [deletion, setDeletion] = useState<
     { phase: 'idle'; error?: string } | { phase: 'deleting' }
@@ -171,6 +175,16 @@ export function SessionDetailScreen(): React.JSX.Element {
   const footer =
     loaded === undefined ? undefined : (
       <View style={styles.footer}>
+        <ExportControls
+          state={exportState}
+          onExport={exportSession}
+          {...(live === undefined
+            ? {}
+            : {
+                disabledReason:
+                  'Stop the session before exporting it, so the file holds the whole recording.',
+              })}
+        />
         <PrimaryButton
           label={deletion.phase === 'deleting' ? 'Deleting…' : 'Delete session'}
           onPress={onDelete}

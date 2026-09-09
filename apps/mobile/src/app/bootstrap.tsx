@@ -10,7 +10,10 @@ import {
 import { createMockBleClient } from '../mock/createMockBleClient';
 import type { BleClient } from '../native/BleClient';
 import { createNativeBleClient } from '../native/createNativeBleClient';
+import { createNativeExportClient } from '../native/createNativeExportClient';
+import type { ExportClient } from '../native/ExportClient';
 import NativeBeaconBluetooth from '../native/specs/NativeBeaconBluetooth';
+import NativeBeaconExport from '../native/specs/NativeBeaconExport';
 import { openAppDatabase } from '../storage/openAppDatabase';
 
 /**
@@ -22,9 +25,16 @@ import { openAppDatabase } from '../storage/openAppDatabase';
 export function createRootComponent(): React.ComponentType {
   const bleClient = createBleClient();
   const sessionRepository = createSessionRepository();
+  const exportClient: ExportClient = createNativeExportClient(NativeBeaconExport);
 
   function Root(): React.JSX.Element {
-    return <App bleClient={bleClient} sessionRepository={sessionRepository} />;
+    return (
+      <App
+        bleClient={bleClient}
+        sessionRepository={sessionRepository}
+        exportClient={exportClient}
+      />
+    );
   }
 
   return Root;
