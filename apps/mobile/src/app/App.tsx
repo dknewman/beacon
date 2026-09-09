@@ -11,12 +11,15 @@ import { SessionRecorderProvider } from '../features/sessions/SessionRecorderPro
 import { SubscriptionProvider } from '../features/subscriptions/SubscriptionProvider';
 import type { BleClient } from '../native/BleClient';
 import { BleClientProvider } from '../native/BleClientContext';
+import type { ExportClient } from '../native/ExportClient';
+import { ExportClientProvider } from '../native/ExportClientContext';
 import { useTheme } from '../theme/useTheme';
 import { RootNavigator } from './navigation/RootNavigator';
 
 export interface AppProps {
   bleClient: BleClient;
   sessionRepository: SessionRepository;
+  exportClient: ExportClient;
 }
 
 /**
@@ -25,26 +28,32 @@ export interface AppProps {
  * below them listens, and all of it sits above navigation so state survives
  * screen changes.
  */
-export function App({ bleClient, sessionRepository }: AppProps): React.JSX.Element {
+export function App({
+  bleClient,
+  sessionRepository,
+  exportClient,
+}: AppProps): React.JSX.Element {
   return (
     <SafeAreaProvider>
-      <BleClientProvider client={bleClient}>
-        <ActivityBusProvider>
-          <ScanProvider>
-            <ConnectionProvider>
-              <GattProvider>
-                <PacketLogProvider>
-                  <SubscriptionProvider>
-                    <SessionRecorderProvider repository={sessionRepository}>
-                      <ThemedNavigation />
-                    </SessionRecorderProvider>
-                  </SubscriptionProvider>
-                </PacketLogProvider>
-              </GattProvider>
-            </ConnectionProvider>
-          </ScanProvider>
-        </ActivityBusProvider>
-      </BleClientProvider>
+      <ExportClientProvider client={exportClient}>
+        <BleClientProvider client={bleClient}>
+          <ActivityBusProvider>
+            <ScanProvider>
+              <ConnectionProvider>
+                <GattProvider>
+                  <PacketLogProvider>
+                    <SubscriptionProvider>
+                      <SessionRecorderProvider repository={sessionRepository}>
+                        <ThemedNavigation />
+                      </SessionRecorderProvider>
+                    </SubscriptionProvider>
+                  </PacketLogProvider>
+                </GattProvider>
+              </ConnectionProvider>
+            </ScanProvider>
+          </ActivityBusProvider>
+        </BleClientProvider>
+      </ExportClientProvider>
     </SafeAreaProvider>
   );
 }

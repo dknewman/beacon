@@ -12,7 +12,9 @@
 		1B5602C2F1481D1ED241C1E3 /* AuthorizationMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42BECBF520039A52F44C595D /* AuthorizationMapper.swift */; };
 		1F0B215FF3649BBDC6A49694 /* BleError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C852C45C8D3EC39ACEED5DB /* BleError.swift */; };
 		219BBFC7FFB1FC4DED6B9BCB /* GattMapperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DFD5D81E931C188422927BF /* GattMapperTests.swift */; };
+		25C68B370EB1C4F850DE1994 /* ExportFileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6FF1C1A947BBFD61808208B /* ExportFileStore.swift */; };
 		289C65A63D640D5CCC5C1C23 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A0EDC16933CD824D04B98774 /* Foundation.framework */; };
+		346BC41C56FF4357A74484F7 /* ExportFileStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFF2BEFA11C5F0CF851AA563 /* ExportFileStoreTests.swift */; };
 		430229BE757428EFEBFC8715 /* CharacteristicValueMapperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EC4304EAD5033230AF174EC /* CharacteristicValueMapperTests.swift */; };
 		4CEAA67EEBA84FD560C80B79 /* BluetoothStateMapperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A6942770E2E13358E905143 /* BluetoothStateMapperTests.swift */; };
 		5921DECEE8C8FAD461F09D9A /* ConnectionStateMapperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86C28A2C6EFDFDE292EB0D1A /* ConnectionStateMapperTests.swift */; };
@@ -24,12 +26,15 @@
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
 		9495A1C96571B82FABA67C7A /* AdvertisementMapperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65FC448B7BF60498BF921DD5 /* AdvertisementMapperTests.swift */; };
 		99B99BD953545AA43F621826 /* AuthorizationMapperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EDF5E388312ED3D2C869E2D /* AuthorizationMapperTests.swift */; };
+		9C9CD857A1538D923454691C /* ExportManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEDEBE2EEF2EA67112834503 /* ExportManager.swift */; };
 		B2F6989E6FD99B2DE69E27E8 /* BluetoothStateMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF3BC966D5D5CC3B1C63BC97 /* BluetoothStateMapper.swift */; };
+		B48552E6A7E2C3B83735E85F /* ShareSheetPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAA8B8C3C6978D151570E28A /* ShareSheetPresenter.swift */; };
 		B675ACD4B8035D797B8CB41B /* ConnectionStateMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49E0DD19CDC582467758F7FB /* ConnectionStateMapper.swift */; };
 		BA0885F8B4CBBB1416D1BB44 /* BeaconBluetoothModule.mm in Sources */ = {isa = PBXBuildFile; fileRef = 3D1D44740C7A5CDDA19C204C /* BeaconBluetoothModule.mm */; };
 		C3313412B4A43EAB770850D9 /* AdvertisementMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6AC5113B1BC7A7282DC8CFB /* AdvertisementMapper.swift */; };
 		D04C98A36B222877D5A8C732 /* GattOperationQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3EC324F5694B26B385BC597 /* GattOperationQueueTests.swift */; };
 		D09AC4B4483C16CCBCDEFF25 /* CharacteristicValueMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21219D6703A26C8A708CF133 /* CharacteristicValueMapper.swift */; };
+		D0D0E5F1BFA18041F89488C9 /* BeaconExportModule.mm in Sources */ = {isa = PBXBuildFile; fileRef = 9BBF5B2EB002BE74A3B58386 /* BeaconExportModule.mm */; };
 		D3BAE494FE0F7DBE9917DD8A /* GattOperationQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 870DF845A53933FAC4AB69C1 /* GattOperationQueue.swift */; };
 		E24A810667EAFACE2ED2DC1F /* ByteArrayMapperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6D02F74278CFF1966686B29 /* ByteArrayMapperTests.swift */; };
 		EEBE747C0DAE9FD1FD1408C0 /* GattMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0129BD5FE9B30222F871614F /* GattMapper.swift */; };
@@ -71,13 +76,19 @@
 		86C28A2C6EFDFDE292EB0D1A /* ConnectionStateMapperTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ConnectionStateMapperTests.swift; sourceTree = "<group>"; };
 		870DF845A53933FAC4AB69C1 /* GattOperationQueue.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = GattOperationQueue.swift; sourceTree = "<group>"; };
 		92E35247F005AF2418C73BE5 /* ByteArrayMapper.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ByteArrayMapper.swift; sourceTree = "<group>"; };
+		9BBF5B2EB002BE74A3B58386 /* BeaconExportModule.mm */ = {isa = PBXFileReference; includeInIndex = 1; path = BeaconExportModule.mm; sourceTree = "<group>"; };
 		A0EDC16933CD824D04B98774 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		A6AC5113B1BC7A7282DC8CFB /* AdvertisementMapper.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AdvertisementMapper.swift; sourceTree = "<group>"; };
+		A6FF1C1A947BBFD61808208B /* ExportFileStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ExportFileStore.swift; sourceTree = "<group>"; };
 		B4E6D3B07EB22CF32619F436 /* BeaconBluetoothModule.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = BeaconBluetoothModule.h; sourceTree = "<group>"; };
 		C2009FDD8DB204A6B62CEE3B /* BluetoothManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BluetoothManager.swift; sourceTree = "<group>"; };
 		C3EC324F5694B26B385BC597 /* GattOperationQueueTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = GattOperationQueueTests.swift; sourceTree = "<group>"; };
 		CF3BC966D5D5CC3B1C63BC97 /* BluetoothStateMapper.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BluetoothStateMapper.swift; sourceTree = "<group>"; };
 		DC0F8D38E9C8A38853FE056A /* PeripheralSession.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PeripheralSession.swift; sourceTree = "<group>"; };
+		DEDEBE2EEF2EA67112834503 /* ExportManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ExportManager.swift; sourceTree = "<group>"; };
+		DFF2BEFA11C5F0CF851AA563 /* ExportFileStoreTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ExportFileStoreTests.swift; sourceTree = "<group>"; };
+		E6C9B15C3997EA71116C021B /* BeaconExportModule.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = BeaconExportModule.h; sourceTree = "<group>"; };
+		EAA8B8C3C6978D151570E28A /* ShareSheetPresenter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ShareSheetPresenter.swift; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 		F6D02F74278CFF1966686B29 /* ByteArrayMapperTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ByteArrayMapperTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -136,6 +147,7 @@
 				C3EC324F5694B26B385BC597 /* GattOperationQueueTests.swift */,
 				F6D02F74278CFF1966686B29 /* ByteArrayMapperTests.swift */,
 				6EC4304EAD5033230AF174EC /* CharacteristicValueMapperTests.swift */,
+				DFF2BEFA11C5F0CF851AA563 /* ExportFileStoreTests.swift */,
 			);
 			name = BeaconBluetoothTests;
 			path = BeaconBluetoothTests;
@@ -182,6 +194,7 @@
 				BBD78D7AC51CEA395F1C20DB /* Pods */,
 				F48B5F0394EC843ADC1CF514 /* BeaconBluetooth */,
 				2E10D2720B5A9FD45489739A /* BeaconBluetoothTests */,
+				BB061A6BD89AE14FFEBBCD4C /* BeaconExport */,
 			);
 			indentWidth = 2;
 			sourceTree = "<group>";
@@ -195,6 +208,19 @@
 				01FCE67867AA56EF01CCE332 /* BeaconBluetoothTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		BB061A6BD89AE14FFEBBCD4C /* BeaconExport */ = {
+			isa = PBXGroup;
+			children = (
+				E6C9B15C3997EA71116C021B /* BeaconExportModule.h */,
+				9BBF5B2EB002BE74A3B58386 /* BeaconExportModule.mm */,
+				DEDEBE2EEF2EA67112834503 /* ExportManager.swift */,
+				A6FF1C1A947BBFD61808208B /* ExportFileStore.swift */,
+				EAA8B8C3C6978D151570E28A /* ShareSheetPresenter.swift */,
+			);
+			name = BeaconExport;
+			path = BeaconExport;
 			sourceTree = "<group>";
 		};
 		BBD78D7AC51CEA395F1C20DB /* Pods */ = {
@@ -415,6 +441,10 @@
 				D3BAE494FE0F7DBE9917DD8A /* GattOperationQueue.swift in Sources */,
 				5C9B8E3B49BD78865A8FC436 /* ByteArrayMapper.swift in Sources */,
 				D09AC4B4483C16CCBCDEFF25 /* CharacteristicValueMapper.swift in Sources */,
+				D0D0E5F1BFA18041F89488C9 /* BeaconExportModule.mm in Sources */,
+				9C9CD857A1538D923454691C /* ExportManager.swift in Sources */,
+				25C68B370EB1C4F850DE1994 /* ExportFileStore.swift in Sources */,
+				B48552E6A7E2C3B83735E85F /* ShareSheetPresenter.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -431,6 +461,7 @@
 				D04C98A36B222877D5A8C732 /* GattOperationQueueTests.swift in Sources */,
 				E24A810667EAFACE2ED2DC1F /* ByteArrayMapperTests.swift in Sources */,
 				430229BE757428EFEBFC8715 /* CharacteristicValueMapperTests.swift in Sources */,
+				346BC41C56FF4357A74484F7 /* ExportFileStoreTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

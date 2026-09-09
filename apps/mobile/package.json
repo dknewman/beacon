@@ -12,6 +12,7 @@
   "dependencies": {
     "@beacon/ble-contracts": "0.1.0",
     "@beacon/protocol-parsers": "0.1.0",
+    "@beacon/session-export": "0.1.0",
     "@beacon/validation": "0.1.0",
     "@op-engineering/op-sqlite": "18.2.0",
     "@react-navigation/native": "^7.3.18",
@@ -38,7 +39,8 @@
     },
     "ios": {
       "modulesProvider": {
-        "BeaconBluetooth": "BeaconBluetoothModule"
+        "BeaconBluetooth": "BeaconBluetoothModule",
+        "BeaconExport": "BeaconExportModule"
       }
     }
   }

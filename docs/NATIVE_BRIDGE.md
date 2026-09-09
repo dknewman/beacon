@@ -1,10 +1,16 @@
 # Native Bridge
 
-Beacon uses a React Native **Turbo Native Module** generated from a TypeScript spec. The bridge
+Beacon uses React Native **Turbo Native Modules** generated from TypeScript specs. The bridge
 is deliberately narrow: primitives, plain objects, promises and typed event emitters only. All
 domain typing and validation happen on the JavaScript side.
 
-## Spec
+There are two modules. `BeaconBluetooth` is the radio and everything that touches it.
+`BeaconExport` (M9) writes a document to a private directory and presents the platform share
+sheet; it is separate because neither of those is a Bluetooth operation, and folding them in
+would make the BLE module's surface and its error union mean two things (ADR 0010). Both are
+generated from the specs in `apps/mobile/src/native/specs`.
+
+## Spec: BeaconBluetooth
 
 `apps/mobile/src/native/specs/NativeBeaconBluetooth.ts`
 
@@ -58,18 +64,27 @@ export interface Spec extends TurboModule {
 export default TurboModuleRegistry.getEnforcing<Spec>('BeaconBluetooth');
 ```
 
-Codegen configuration lives in `apps/mobile/package.json` (`codegenConfig`). The iOS module is
-registered through `ios.modulesProvider`; the Android module is registered manually in
-`MainApplication.kt` via `BeaconBluetoothPackage`.
+Codegen configuration lives in `apps/mobile/package.json` (`codegenConfig`), and one
+configuration covers both specs: `jsSrcsDir` is the whole `src/native/specs` directory.
+`ios.modulesProvider` maps each module name to its Objective-C++ class
+(`BeaconBluetooth` → `BeaconBluetoothModule`, `BeaconExport` → `BeaconExportModule`), so
+neither needs `RCT_EXPORT_MODULE`; on Android each is registered by hand in
+`MainApplication.kt` (`BeaconBluetoothPackage()`, `BeaconExportPackage()`), because they live
+in the app rather than in a library and autolinking does not see them.
 
 Generated artifacts (never committed):
 
 - iOS: `ios/build/generated/ios/ReactCodegen/BeaconBluetoothSpec/BeaconBluetoothSpec.h` defines
   `NativeBeaconBluetoothSpec` (protocol), `NativeBeaconBluetoothSpecBase` (event emitter base
-  class) and `NativeBeaconBluetoothSpecJSI`.
-- Android: `com.beacon.bluetooth.spec.NativeBeaconBluetoothSpec` (abstract class with one
-  `Promise` method per spec method and one `emitOn…(ReadableMap)` per emitter). The package
-  comes from `codegenConfig.android.javaPackageName`, which the Gradle plugin honors.
+  class) and `NativeBeaconBluetoothSpecJSI`. Every spec in `jsSrcsDir` lands in that one
+  umbrella header, named after `codegenConfig.name`, so `NativeBeaconExportSpec` is declared
+  there too and `BeaconExportModule.h` imports the Bluetooth-named header despite having
+  nothing to do with Bluetooth.
+- Android: `com.beacon.bluetooth.spec.NativeBeaconBluetoothSpec` and
+  `com.beacon.bluetooth.spec.NativeBeaconExportSpec` (abstract classes with one `Promise`
+  method per spec method and one `emitOn…(ReadableMap)` per emitter). The package comes from
+  `codegenConfig.android.javaPackageName`, which the Gradle plugin honors, and is shared by
+  both specs for the same reason.
 
 Scalar parameters are chosen over object parameters (`startScan(serviceUuids, allowDuplicates)`
 rather than `startScan(options)`) because arrays and primitives map to plain `NSArray`/`BOOL` and
@@ -154,7 +169,7 @@ The iOS and Android builds run codegen automatically. The standalone
 `javaPackageName` for app projects and emits the Android spec under `com.facebook.fbreact.specs`;
 the Gradle build is the source of truth.
 
-## iOS
+## iOS (BeaconBluetooth)
 
 ```text
 BeaconBluetoothModule.mm  (Objective-C++)  — conforms to the generated spec, forwards to Swift
@@ -225,7 +240,7 @@ the connection coordinator ignores because operation-level codes never mean the 
 link that ends clears the subscribed set, because CoreBluetooth drops subscriptions with the
 connection, and the queue cancellation rejects a pending `setNotify` with `disconnected`.
 
-## Android
+## Android (BeaconBluetooth)
 
 ```text
 BeaconBluetoothModule.kt   — extends generated NativeBeaconBluetoothSpec, module lifecycle
@@ -288,6 +303,103 @@ module, which emits the event with the bytes unpacked as unsigned integers. Clos
 client ends every subscription (the `subscribed` set is cleared with the link); the queue
 cancellation rejects a pending `setNotify` with `disconnected`.
 
+## The export module (M9)
+
+`apps/mobile/src/native/specs/NativeBeaconExport.ts`
+
+```ts
+export interface Spec extends TurboModule {
+  writeTemporaryFile(fileName: string, contents: string): Promise<string>;
+  shareFile(path: string, mimeType: string): Promise<boolean>;
+  clearTemporaryFiles(): Promise<number>;
+}
+export default TurboModuleRegistry.getEnforcing<Spec>('BeaconExport');
+```
+
+Three calls, no events, and nothing but strings, a boolean and a number across the boundary.
+
+`writeTemporaryFile(fileName, contents)` writes `contents` as UTF-8 into a private directory
+the module owns and resolves with the absolute path, replacing any file already there under
+the same name. `fileName` is a name, not a location: native reduces it to its last path
+component, so a caller cannot choose where in the container the file lands, and a name that
+reduces to nothing usable (empty, `.`, `..`) is refused.
+
+`shareFile(path, mimeType)` presents the platform share sheet for a file this module wrote.
+The path is checked for containment first — a path the module did not write never reaches a
+sheet — and `mimeType` tells Android what the file is (iOS works it out from the extension and
+ignores the argument, because telling the sheet something the extension contradicts would only
+confuse the activities it offers).
+
+`clearTemporaryFiles()` empties that directory and resolves with how many files went. It never
+rejects: a directory that is already empty, or was never created, is the state the caller
+asked for.
+
+The boolean `shareFile` resolves with means "did the person complete a share", and the two
+platforms can answer it to different depths. iOS answers accurately:
+`UIActivityViewController`'s completion handler distinguishes a completed activity from a
+dismissal, so `false` means the sheet was closed without sharing. Android always resolves
+`true` once the chooser has been started, because `Intent.createChooser` finishes as soon as a
+target is picked, the target then runs in its own task, and almost none of them report a
+result — a completion signal there would say "cancelled" for most successful shares, and
+answering wrongly is worse than not answering. Callers therefore read `false` as "definitely
+dismissed" and `true` as "not known to be dismissed", never as proof the document went
+anywhere, which is why the UI says a file "was handed to the share sheet" (ADR 0010).
+
+Rejections carry an `ExportErrorCode` (`@beacon/session-export`), deliberately not a
+`BleErrorCode`:
+
+| Code                   | When                                                                                                                    |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `export_write_failed`  | The document could not be written: an unusable file name, or the file system refused (the system's description is kept) |
+| `export_share_failed`  | No sheet could be presented: no view controller on iOS, no foreground Activity on Android, or the chooser threw         |
+| `export_file_missing`  | The path is not one this module wrote, or the file is no longer there                                                   |
+| `export_source_failed` | The session or its events could not be read back from the store (raised in JavaScript, never natively)                  |
+| `export_unknown`       | The fallback for anything else (raised in JavaScript)                                                                   |
+
+Only the first three can come from native, so the Swift `ExportErrorCode` enum and the Kotlin
+constants list those three rather than carrying cases they can never produce. The wire values
+are the strings above on every platform.
+
+iOS (`apps/mobile/ios/BeaconExport`):
+
+```text
+BeaconExportModule.h/.mm  (Objective-C++) — conforms to the generated spec, forwards to Swift
+ExportManager.swift                       — @objc composition root; ExportErrorCode / ExportError with its payload dictionary; file work on a private queue
+ExportFileStore.swift                     — owns <tmp>/beacon-exports: write, containment, existence, clear (no UIKit, unit tested)
+ShareSheetPresenter.swift                 — UIActivityViewController from the top view controller of the foreground scene, iPad popover anchoring
+```
+
+The shim is as thin as `BeaconBluetoothModule.mm`: it forwards each call and turns an
+`ExportError.payload` dictionary into `reject(code, message, NSError)` so JavaScript's
+`toExportError` reads the contract code off the rejection, the same convention the BLE module
+uses. `shareFile` resolves `@YES`/`@NO` rather than `@(shared)`, because the bridge only turns
+a boolean `NSNumber` into a JavaScript boolean and whether `@()` produces one depends on how
+`BOOL` is defined for the architecture. File work runs on a private `userInitiated` queue and
+hops to the main thread to present, which is the only thread that can. `ExportFileStore`
+standardises and symlink-resolves both paths and compares path components, so a `..` in the
+middle cannot walk out of the directory and back in, and a sibling directory whose name merely
+starts with ours does not pass.
+
+Android (`apps/mobile/android/app/src/main/java/com/beacon/export`):
+
+```text
+BeaconExportModule.kt   — extends the generated NativeBeaconExportSpec; FileProvider URI, ACTION_SEND, chooser
+BeaconExportPackage.kt  — BaseReactPackage registration (isTurboModule = true), added in MainApplication
+ExportFileStore.kt      — owns <cacheDir>/beacon-exports: write, containment by canonical path, clear (no framework types, unit tested)
+```
+
+The file leaves the app as a `content://` URI from a `FileProvider` declared in the manifest
+with authority `${applicationId}.exports`, `android:exported="false"` and
+`android:grantUriPermissions="true"`, scoped by `res/xml/export_paths.xml` to the one
+`beacon-exports` cache subdirectory — the rest of the cache holds the JavaScript bundle,
+images and the database's working files, and none of that should be reachable through a share.
+`FLAG_GRANT_READ_URI_PERMISSION` is set on both the `ACTION_SEND` intent and the chooser,
+because the grant travels with the intent that is actually started. The chooser is started
+from `currentActivity`; without one the call rejects with `export_share_failed` rather than
+starting it from the application context, which would put the sheet in its own task behind the
+app. `clearTemporaryFiles` resolves a `Double` because the spec's return type is a JavaScript
+`number`, which has no integers.
+
 ## JavaScript wrapper
 
 `apps/mobile/src/native/createNativeBleClient.ts` implements `BleClient`, which since M6 is
@@ -314,15 +426,36 @@ ConnectionApi & GattDiscoveryApi & GattValueApi & GattNotifyApi`):
   the latter checks the byte range and the native timestamp too), and returns one unsubscribe
   function that removes every native subscription.
 
+`apps/mobile/src/native/createNativeExportClient.ts` does the same job for `ExportClient`. The
+export module returns primitives, so what it does is a type check rather than a schema parse:
+a `writeTemporaryFile` that resolves without a path, or a `shareFile` that resolves with
+something other than a boolean, means native and the spec disagree, which is raised loudly
+rather than coerced. Rejections go through `toExportError` with a per-call default
+(`export_write_failed`, `export_share_failed`, and `export_unknown` for a clear).
+`clearTemporaryFiles` is the one call that forgives a nonsensical answer, resolving 0, because
+the count is advisory and nothing branches on it. `ExportClientProvider` /
+`useExportClient` inject the client the way `BleClientProvider` does, and
+`tests/fakes/FakeExportClient.ts` implements the same contract so the App tests drive an
+export without mocking the module.
+
 ## Error convention
 
 Native rejects promises with `code` set to a `BleErrorCode` wire value and the message as a
 human readable string. Android additionally passes `nativeCode`/`nativeDomain` through the
 rejection `userInfo`. JavaScript reads `code` in `toBleError`.
 
+`BeaconExport` follows the same convention with its own union: the `code` is an
+`ExportErrorCode` and `createNativeExportClient` reads it with `toExportError`. It carries no
+platform diagnostics, because none of its failures come from a framework with a code worth
+showing and the system's own description already says what went wrong when a write fails. The
+two unions are kept apart on purpose (ADR 0010), so an exhaustive switch over `BleErrorCode`
+never has to answer for a full disk.
+
 ## Extending the bridge
 
-1. Add the method or emitter to the spec using codegen-compatible types.
+1. Add the method or emitter to the spec using codegen-compatible types. A capability that is
+   not about the radio gets its own module and its own error union rather than a method on
+   `BeaconBluetooth`; `BeaconExport` is the worked example.
 2. Add the matching segment implementation to the contract wrapper and validate its payloads.
 3. Implement in Swift (`BluetoothManager` or a new `PeripheralSession`) and expose through the
    `.mm` shim. A GATT operation goes through the session's `GattOperationQueue` and calls

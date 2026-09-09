@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
-# Adds the BeaconBluetooth native sources and the BeaconBluetoothTests unit test target to
-# apps/mobile/ios/Beacon.xcodeproj. Idempotent: re-running does not duplicate entries.
+# Adds the BeaconBluetooth and BeaconExport native sources and the BeaconBluetoothTests unit
+# test target to apps/mobile/ios/Beacon.xcodeproj. Idempotent: re-running does not duplicate
+# entries.
 #
 # Usage: ruby scripts/ios/sync-xcode-project.rb
 # Requires: gem install xcodeproj
@@ -55,6 +56,21 @@ ensure_file(ble_group, 'BeaconBluetoothModule.h')
   ensure_source(app_target, ensure_file(group, file))
 end
 
+# --- BeaconExport sources in the app target ------------------------------------------------
+# The export module is a separate directory from BeaconBluetooth on purpose: it shares the
+# codegen target but nothing else.
+export_group = ensure_group(project.main_group, 'BeaconExport', 'BeaconExport')
+
+ensure_file(export_group, 'BeaconExportModule.h')
+[
+  [export_group, 'BeaconExportModule.mm'],
+  [export_group, 'ExportManager.swift'],
+  [export_group, 'ExportFileStore.swift'],
+  [export_group, 'ShareSheetPresenter.swift'],
+].each do |group, file|
+  ensure_source(app_target, ensure_file(group, file))
+end
+
 # --- Unit test target ---------------------------------------------------------------------
 test_target = project.targets.find { |t| t.name == 'BeaconBluetoothTests' }
 unless test_target
@@ -91,6 +107,7 @@ tests_group = ensure_group(project.main_group, 'BeaconBluetoothTests', 'BeaconBl
   BluetoothStateMapperTests.swift BleErrorTests.swift AuthorizationMapperTests.swift
   AdvertisementMapperTests.swift ConnectionStateMapperTests.swift GattMapperTests.swift
   GattOperationQueueTests.swift ByteArrayMapperTests.swift CharacteristicValueMapperTests.swift
+  ExportFileStoreTests.swift
 ].each do |file|
   ensure_source(test_target, ensure_file(tests_group, file))
 end

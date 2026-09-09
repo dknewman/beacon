@@ -1,0 +1,13 @@
+{
+  "name": "@beacon/session-export",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Serializers that turn a recorded session into a JSON or CSV document",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "sideEffects": false,
+  "dependencies": {
+    "@beacon/ble-contracts": "0.1.0",
+    "@beacon/validation": "0.1.0"
+  }
+}
