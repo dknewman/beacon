@@ -16,4 +16,12 @@ export {
   type CsvExportOptions,
 } from './csv';
 export { canonicalEvent, canonicalSession } from './canonical';
+export {
+  ExportError,
+  EXPORT_ERROR_CODES,
+  isExportError,
+  isExportErrorCode,
+  toExportError,
+  type ExportErrorCode,
+} from './errors';
 export { exportFileName, EXPORT_MIME_TYPES, type ExportFormat } from './fileName';
