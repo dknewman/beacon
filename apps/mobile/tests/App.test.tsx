@@ -1971,6 +1971,25 @@ describe('App (session export)', () => {
     await waitFor(() => expect(exportStatus()).toHaveTextContent(/Building the JSON/));
   });
 
+  it('reports a store that cannot be read as an export failure', async () => {
+    const repository = new InMemorySessionRepository();
+    const exportClient = new FakeExportClient();
+    await openRecordedSession(repository, exportClient);
+
+    // Either read failing is the source failing, whichever call it came from.
+    jest
+      .spyOn(repository, 'getSession')
+      .mockRejectedValueOnce(new Error('the database is locked'));
+    await fireEvent.press(screen.getByTestId('export-json'));
+
+    await waitFor(() =>
+      expect(exportStatus()).toHaveTextContent(
+        /The JSON export failed: the database is locked/,
+      ),
+    );
+    expect(exportClient.written).toHaveLength(0);
+  });
+
   it('refuses to export a session that is still recording', async () => {
     const repository = new InMemorySessionRepository();
     const exportClient = new FakeExportClient();

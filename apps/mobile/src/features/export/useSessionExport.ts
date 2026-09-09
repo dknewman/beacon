@@ -74,18 +74,21 @@ interface LoadedSession {
   events: SessionEvent[];
 }
 
+/**
+ * Both reads are wrapped together: anything the store refuses is the source
+ * failing, whichever call it came from. Splitting them would let a rejection
+ * from `getSession` fall through as an unknown failure while the identical
+ * one from `listEvents` reported the source.
+ */
 async function readSession(
   repository: SessionRepository,
   sessionId: string,
 ): Promise<LoadedSession> {
-  const session = await repository.getSession(sessionId);
-  if (session === undefined) {
-    throw toExportError(
-      new Error('The session is no longer stored'),
-      'export_source_failed',
-    );
-  }
   try {
+    const session = await repository.getSession(sessionId);
+    if (session === undefined) {
+      throw new Error('The session is no longer stored');
+    }
     return { session, events: await repository.listEvents(sessionId) };
   } catch (error: unknown) {
     throw toExportError(error, 'export_source_failed');
