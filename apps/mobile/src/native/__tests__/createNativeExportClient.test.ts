@@ -3,12 +3,12 @@ import { createNativeExportClient } from '../createNativeExportClient';
 import type { Spec } from '../specs/NativeBeaconExport';
 
 function specWith(overrides: Partial<Spec>): Spec {
-  return {
+  const base: Spec = {
     writeTemporaryFile: () => Promise.resolve('/tmp/beacon/file.json'),
     shareFile: () => Promise.resolve(true),
     clearTemporaryFiles: () => Promise.resolve(0),
-    ...overrides,
-  } as Spec;
+  };
+  return { ...base, ...overrides };
 }
 
 describe('createNativeExportClient', () => {
