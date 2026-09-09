@@ -8,7 +8,12 @@ import type { ExportFormat } from '@beacon/session-export';
 export interface ExportClient {
   /** Writes the document to a private temporary file and returns its path. */
   writeTemporaryFile(fileName: string, contents: string): Promise<string>;
-  /** Presents the share sheet; resolves false when the person dismissed it. */
+  /**
+   * Presents the share sheet. Resolves false only when the platform can prove
+   * the person dismissed it, which iOS can and Android cannot; true therefore
+   * means "not known to be dismissed" rather than "delivered". See the spec in
+   * specs/NativeBeaconExport.ts for why.
+   */
   shareFile(path: string, mimeType: string): Promise<boolean>;
   /** Removes every temporary file the module wrote; resolves with the count. */
   clearTemporaryFiles(): Promise<number>;

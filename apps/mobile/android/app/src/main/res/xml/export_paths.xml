@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Paths the exports FileProvider may hand out. Only the one subdirectory the export module
+     owns is listed: the rest of the cache holds the JavaScript bundle, images and the
+     database's working files, and none of that should ever be reachable through a share. -->
+<paths>
+    <cache-path name="beacon-exports" path="beacon-exports/" />
+</paths>

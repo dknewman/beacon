@@ -2,6 +2,7 @@ package com.beacon
 
 import android.app.Application
 import com.beacon.bluetooth.BeaconBluetoothPackage
+import com.beacon.export.BeaconExportPackage
 import com.facebook.react.PackageList
 import com.facebook.react.ReactApplication
 import com.facebook.react.ReactHost
@@ -15,9 +16,10 @@ class MainApplication : Application(), ReactApplication {
       context = applicationContext,
       packageList =
         PackageList(this).packages.apply {
-          // App-local Turbo Module; it lives in this app rather than a library, so it is
-          // registered by hand instead of through autolinking.
+          // App-local Turbo Modules; they live in this app rather than a library, so they
+          // are registered by hand instead of through autolinking.
           add(BeaconBluetoothPackage())
+          add(BeaconExportPackage())
         },
     )
   }
