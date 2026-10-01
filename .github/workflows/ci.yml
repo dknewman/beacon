@@ -57,7 +57,7 @@ jobs:
           # (API 37 packages carry a minor version; "platforms;android-37" does not exist).
           # Only the NDK and CMake versions React Native pins need installing.
           packages: ndk;27.1.12297006 cmake;3.22.1
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
       - run: yarn install --frozen-lockfile
       - name: Kotlin unit tests
         working-directory: apps/mobile/android
